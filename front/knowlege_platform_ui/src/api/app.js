@@ -67,7 +67,8 @@ export function chatKnowledge(data) {
 export function getSessions() {
   return service({
     url: '/sessions',
-    method: 'get'
+    method: 'get',
+    params: { app_type: 'knowledge' }
   })
 }
 

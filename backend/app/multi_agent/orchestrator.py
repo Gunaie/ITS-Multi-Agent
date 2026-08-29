@@ -29,12 +29,12 @@ orchestrator_agent = Agent(
         handoff(
             technical_agent, 
             on_handoff=on_handoff_technical,
-            tool_name_override="transfer_to_technical_expert"
+            tool_name_override="consult_technical_expert"
         ),
         handoff(
             comprehensive_service_agent, 
             on_handoff=on_handoff_service,
-            tool_name_override="transfer_to_service_expert"
+            tool_name_override="query_service_station_and_navigate"
         )
     ],
 )

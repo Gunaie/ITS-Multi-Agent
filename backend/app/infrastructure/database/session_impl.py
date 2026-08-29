@@ -26,10 +26,6 @@ class SimpleSession(SessionABC):
     @context.setter
     def context(self, value: dict):
         self._context = value or {}
-    
-    @context.setter
-    def context(self, value: dict):
-        self._context = value
 
     async def get_items(self, limit: Optional[int] = None) -> List[TResponseInputItem]:
         if limit is None:

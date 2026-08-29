@@ -141,17 +141,18 @@ const handleSend = async () => {
   try {
     const res = await chatKnowledge({ 
       question,
-      session_id: props.sessionId
+      session_id: props.sessionId,
+      app_type: 'knowledge'
     })
     
     botMsg.content = res.answer
     botMsg.loading = false
     
     // 解析引用来源
-    const sourceRegex = /【资料(\d+)】/g
+    const sourceRegex = /【资料(\d+)】|\[([\w\-. ]+\.md)\]/g
     const matches = botMsg.content.match(sourceRegex)
     if (matches) {
-      botMsg.sources = [...new Set(matches)]
+      botMsg.sources = [...new Set(matches.map(m => m.replace(/[\[\]]/g, '')))]
     }
     
     emit('session-updated')

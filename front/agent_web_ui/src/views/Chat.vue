@@ -234,7 +234,8 @@ const handleSend = async () => {
      { 
        question: text,
        session_id: props.sessionId,
-       location: userLocation.value
+       location: userLocation.value,
+       app_type: 'agent'
      },
       (event) => {
       if (event.type === 'agent_updated_stream_event') {
@@ -263,11 +264,11 @@ const handleSend = async () => {
           if (event.content) {
             botMsg.content += event.content
             
-            // 实时解析引用来源 (例如: 【资料1】)
-            const sourceRegex = /【资料(\d+)】/g
+            // 实时解析引用来源 (例如: 【资料1】 或 [文件名.md])
+            const sourceRegex = /【资料(\d+)】|\[([\w\-. ]+\.md)\]/g
             const matches = botMsg.content.match(sourceRegex)
             if (matches) {
-              const uniqueSources = [...new Set(matches)]
+              const uniqueSources = [...new Set(matches.map(m => m.replace(/[\[\]]/g, '')))]
               botMsg.sources = uniqueSources
             }
           }

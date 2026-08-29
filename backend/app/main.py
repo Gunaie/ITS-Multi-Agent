@@ -29,6 +29,16 @@ app = FastAPI(title="ITS Multi-Agent Application Backend")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error for {request.url.path}: {exc.errors()}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors(), "body": str(exc.body)},
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
@@ -80,10 +90,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from typing import Optional
+
 class ChatRequest(BaseModel):
     question: str
     session_id: str = "default"
-    location: str = None
+    location: Optional[str] = None
+    app_type: str = "agent"  # agent (咨询平台) 或 knowledge (管理平台)
 
 class ChatResponse(BaseModel):
     answer: str
@@ -107,7 +120,7 @@ def get_session(session_id: str) -> Session:
     new_session = SimpleSession(session_id=session_id)
     return new_session
 
-def save_session(session_id: str, session: Session, user_id: str = None):
+def save_session(session_id: str, session: Session, user_id: str = None, app_type: str = "agent"):
     try:
         # 保存会话内容 (使用 pickle 以支持 agents 库的复杂对象)
         binary_redis_client.setex(
@@ -117,8 +130,8 @@ def save_session(session_id: str, session: Session, user_id: str = None):
         )
         # 如果提供了用户ID，维护用户的会话列表
         if user_id:
-            # 使用有序集合存储，以时间戳排序
-            redis_client.zadd(f"user_sessions:{user_id}", {session_id: time.time()})
+            # 使用有序集合存储，以时间戳排序，按 app_type 分离
+            redis_client.zadd(f"user_sessions:{app_type}:{user_id}", {session_id: time.time()})
             # 记录会话的元数据（如标题）
             if not redis_client.exists(f"session_meta:{session_id}"):
                 # 初始标题使用第一条提问的前10个字
@@ -141,15 +154,16 @@ def save_session(session_id: str, session: Session, user_id: str = None):
                 
                 redis_client.hset(f"session_meta:{session_id}", mapping={
                     "title": title,
-                    "created_at": time.time()
+                    "created_at": time.time(),
+                    "app_type": app_type
                 })
     except Exception as e:
         logger.error(f"Error saving session to redis: {e}")
 
 @app.get("/sessions")
-async def list_sessions(current_user: dict = Depends(get_current_user)):
+async def list_sessions(app_type: str = "agent", current_user: dict = Depends(get_current_user)):
     user_id = current_user['username'] # 使用用户名作为标识
-    session_ids = redis_client.zrevrange(f"user_sessions:{user_id}", 0, -1)
+    session_ids = redis_client.zrevrange(f"user_sessions:{app_type}:{user_id}", 0, -1)
     
     sessions = []
     for sid in session_ids:
@@ -208,8 +222,8 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
             context=session,
             run_config=RunConfig(tracing_disabled=False)
         )
-        # 保存会话状态到 Redis，传入 user_id 以便列出
-        save_session(chat_request.session_id, session, user_id=user_id)
+        # 保存会话状态到 Redis，传入 user_id 以便列出 (增加 app_type 支持)
+        save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
 
         logger.info(f"Agent response generated successfully")
         return ChatResponse(answer=result.final_output)
@@ -245,7 +259,7 @@ async def chat_knowledge(request: Request, chat_request: ChatRequest, current_us
         await session.add_items([{"role": "assistant", "content": answer}])
         
         # 保存会话
-        save_session(chat_request.session_id, session, user_id=user_id)
+        save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
         
         return ChatResponse(answer=answer)
     except Exception as e:
@@ -310,13 +324,16 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                             
                             # 优先尝试 content 属性或字段
                             content = getattr(obj, "content", None) or (obj.get("content") if isinstance(obj, dict) else None)
-                            if content:
-                                if content is obj: return str(obj) # 防止递归
+                            if content and content is not obj:
                                 return extract_text(content)
                                 
                             # 备选：text 属性或字段
                             text = getattr(obj, "text", None) or (obj.get("text") if isinstance(obj, dict) else None)
                             if text: return str(text)
+                            
+                            # 处理 OpenAI 风格的 delta/choice 对象
+                            if hasattr(obj, "delta"):
+                                return extract_text(obj.delta)
                             
                             return str(obj)
 
@@ -326,6 +343,15 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                              delta = raw.choices[0].delta
                              content = extract_text(getattr(delta, "content", ""))
                              reasoning_content = extract_text(getattr(delta, "reasoning_content", ""))
+                        elif isinstance(raw, dict):
+                            # 处理字典格式的 raw_item
+                            choices = raw.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content", "")
+                                reasoning_content = delta.get("reasoning_content", "")
+                            else:
+                                content = raw.get("content", "")
                         
                         event_data["content"] = content
                         if reasoning_content:
@@ -353,9 +379,9 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 # 发送 SSE 数据包，使用 default=str 确保所有不可序列化对象转为字符串
                 yield f"data: {json.dumps(event_data, ensure_ascii=False, default=str)}\n\n"
             
-            # 保存会话状态到 Redis
-            save_session(chat_request.session_id, session, user_id=user_id)
-
+            # 保存会话状态到 Redis (包含 app_type 分离)
+            save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
+            
             # 发送结束标记
             yield "data: [DONE]\n\n"
             

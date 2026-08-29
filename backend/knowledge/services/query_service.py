@@ -48,8 +48,14 @@ class QueryService:
         for index, doc in enumerate(retrival_context):
             file_path = doc.metadata.get('path', '未知文件')
             file_name = os.path.basename(file_path)
-            # 清理内容中的“文档来源:”标记，避免干扰模型
-            clean_content = re.sub(r'^文档来源:.*?(?=(\n|#))', '', doc.page_content, flags=re.DOTALL).strip()
+            # 更安全的清理内容中的“文档来源:”标记
+            content = doc.page_content
+            if content.startswith("文档来源:"):
+                parts = content.split("\n", 1)
+                clean_content = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                clean_content = content.strip()
+            
             formatted_context.append(f"【文件{index+1}：{file_name}】\n内容：{clean_content}")
         
         context_str = "\n\n".join(formatted_context)

@@ -102,43 +102,35 @@ class RetrievalService:
         if not rough_mds_metadata:
             return []
 
-        # 两个二维矩阵（X[样本数] Y[样本质量]） K(X, Y) = <X, Y> / (||X||*||Y||)
+        try:
+            # 2. 对问题向量化
+            query_embedding = self.chroma_vector.embedd_document(user_query)
 
-        # 2. 对问题向量化
-        query_embedding = self.chroma_vector.embedd_document(user_query)
+            # 3. 获取粗排后的标题
+            roughing_title = [md_metadata['title'] for md_metadata in rough_mds_metadata]
 
-        # 3. 获取粗排后的标题
-        roughing_title = [md_metadata['title'] for md_metadata in rough_mds_metadata]
+            # 4. 标题的向量值
+            roughing_title_embeddings = self.chroma_vector.embedd_documents(roughing_title)
 
-        # 4. 标题的向量值
-        roughing_title_embeddings = self.chroma_vector.embedd_documents(roughing_title)
-
-        # 5. 计算问题和粗排标题的相似度（余弦相似分数）分数值越大 代表问题和标题越相似
-        # flatten()--->一维数组[0.1,0.4,0.01,0.6...]
-        # X:1  Y:[1,2,3,4,5]   similarity=[0.1,0.4,0.01,0.6,0.3]【-1,0】
-        similarity = cosine_similarity([query_embedding], roughing_title_embeddings).flatten()
-
-        # 6. 遍历粗排元数据
-        ROUGH_HEIGHT = 0.3
-        SIM_HEIGHT = 0.7
-        for index, md_metadata in enumerate(rough_mds_metadata):
-
-            # a. 获取精排分数(归一)
-            sim = similarity[index]
-            if sim < 0:
-                sim = 0
-            # b. 获取粗排
-            roughing_score = md_metadata['roughing_score']
-
-            # c. 加权求最终精排分数
-            final_score = roughing_score * ROUGH_HEIGHT + sim * SIM_HEIGHT
-
-            # d. 存放到md_metadata 元数据中
-            md_metadata['sim_score'] = sim
-            md_metadata['final_score'] = final_score
+            # 5. 计算问题和粗排标题的相似度
+            similarity = cosine_similarity([query_embedding], roughing_title_embeddings).flatten()
+            
+            ROUGH_HEIGHT = 0.3
+            SIM_HEIGHT = 0.7
+            for index, md_metadata in enumerate(rough_mds_metadata):
+                sim = max(0, similarity[index])
+                roughing_score = md_metadata.get('roughing_score', 0)
+                final_score = roughing_score * ROUGH_HEIGHT + sim * SIM_HEIGHT
+                md_metadata['sim_score'] = sim
+                md_metadata['final_score'] = final_score
+        except Exception as e:
+            logger.error(f"精排向量计算失败: {e}。退化为粗排分数。")
+            for md_metadata in rough_mds_metadata:
+                md_metadata['sim_score'] = 0
+                md_metadata['final_score'] = md_metadata.get('roughing_score', 0)
 
         # 7. 排序
-        sim_mds_metadata = sorted(rough_mds_metadata, key=lambda x: x['final_score'], reverse=True)[:5]
+        sim_mds_metadata = sorted(rough_mds_metadata, key=lambda x: x.get('final_score', 0), reverse=True)[:5]
 
         # 8. 返回
         return sim_mds_metadata
@@ -159,7 +151,6 @@ class RetrievalService:
             based_vector_candidates = self._search_based_vector(user_question)
         except Exception as e:
             logger.error(f"第一路向量检索失败 (可能由于嵌入模型服务异常): {e}")
-            # 向量检索失败时，我们依然继续第二路检索，保证基本的可用性
 
         # 2. 第二路检索(基于jieba的分词匹配的检索)
         based_title_candidates = []
@@ -179,7 +170,11 @@ class RetrievalService:
         unique_candidates = self._deduplicate(total_candidates)
 
         # 5. 重新打分排序
-        rough_top_documents = self._reranking(unique_candidates, user_question)
+        try:
+            rough_top_documents = self._reranking(unique_candidates, user_question)
+        except Exception as e:
+            logger.error(f"重新打分排序失败: {e}。使用原始去重后列表。")
+            rough_top_documents = unique_candidates
 
         # 6. 使用 LLM 进行二次精排 (Rerank)
         try:
@@ -188,7 +183,7 @@ class RetrievalService:
             logger.error(f"LLM Rerank 失败: {e}. 使用原始排序。")
             final_top_documents = rough_top_documents
 
-        # 7.返回指定Top-N个文档列表 (增加到 4 个以提供更多背景)
+        # 7.返回指定Top-N个文档列表
         return final_top_documents[:4]
 
     def _search_based_vector(self, user_question: str) -> List[Document]:
@@ -291,7 +286,14 @@ class RetrievalService:
         # 3. 遍历合并后的每一个文档列表
         for document in total_candidates:
             # 去重（）
-            clean_content = re.sub(r'^文档来源:.*?(?=(\n|#))', '', document.page_content, flags=re.DOTALL).strip()#【加上】
+            # 使用更安全的提取逻辑
+            content = document.page_content
+            if content.startswith("文档来源:"):
+                parts = content.split("\n", 1)
+                clean_content = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                clean_content = content.strip()
+            
             key = (document.metadata['title'], clean_content[:100])
             if key not in seen:
                 seen.add(key)

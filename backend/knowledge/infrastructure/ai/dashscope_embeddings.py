@@ -44,12 +44,17 @@ class DashScopeEmbeddings(Embeddings):
                     response = client.post(self.url, json=payload, headers=headers)
                     if response.status_code != 200:
                         logger.error(f"DashScope API Error: {response.status_code} - {response.text}")
-                        # 如果 404，尝试回退到 text-embedding-v3
-                        if response.status_code == 404 and self.model == "BAAI/bge-m3":
-                            logger.info("Falling back to text-embedding-v3 due to 404")
-                            payload["model"] = "text-embedding-v3"
+                        # 尝试切换模型名 (有些环境需要前缀，有些不需要)
+                        if response.status_code == 404:
+                            alternative_model = "text-embedding-v3" if self.model != "text-embedding-v3" else "BAAI/bge-m3"
+                            logger.info(f"Trying alternative model: {alternative_model}")
+                            payload["model"] = alternative_model
                             response = client.post(self.url, json=payload, headers=headers)
                     
+                    if response.status_code != 200:
+                         # 如果还是失败，抛出带详细信息的异常
+                         raise Exception(f"DashScope API failed after retry: {response.status_code} - {response.text}")
+
                     response.raise_for_status()
                     result = response.json()
                     
@@ -90,12 +95,16 @@ class DashScopeEmbeddings(Embeddings):
                 
                 if response.status_code != 200:
                     logger.error(f"DashScope embed_query Error: {response.status_code} - {response.text}")
-                    # 回退逻辑
-                    if response.status_code == 404 and self.model == "BAAI/bge-m3":
-                        logger.info("Falling back to text-embedding-v3 due to 404")
-                        payload["model"] = "text-embedding-v3"
+                    # 尝试切换模型名
+                    if response.status_code == 404:
+                        alternative_model = "text-embedding-v3" if self.model != "text-embedding-v3" else "BAAI/bge-m3"
+                        logger.info(f"Trying alternative model in embed_query: {alternative_model}")
+                        payload["model"] = alternative_model
                         response = client.post(self.url, json=payload, headers=headers)
                 
+                if response.status_code != 200:
+                     raise Exception(f"DashScope embed_query failed after retry: {response.status_code} - {response.text}")
+
                 response.raise_for_status()
                 result = response.json()
                 
