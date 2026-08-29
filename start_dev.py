@@ -15,13 +15,13 @@ SERVICES = [
     {
         "name": "Knowledge API (8001)",
         "cwd": os.path.join(os.getcwd(), "backend", "knowledge"),
-        "command": [os.path.join(os.getcwd(), "backend", "knowledge", ".venv", "Scripts", "python.exe"), os.path.join(os.getcwd(), "backend", "knowledge", "api", "main.py")],
+        "command": ["uv", "run", "python", os.path.join(os.getcwd(), "backend", "knowledge", "api", "main.py")],
         "env_add": {"PYTHONPATH": os.path.join(os.getcwd(), "backend", "knowledge")}
     },
     {
         "name": "App Backend (8002)",
         "cwd": os.path.join(os.getcwd(), "backend", "app"),
-        "command": [os.path.join(os.getcwd(), "backend", "app", ".venv", "Scripts", "python.exe"), os.path.join(os.getcwd(), "backend", "app", "main.py")],
+        "command": ["uv", "run", "python", os.path.join(os.getcwd(), "backend", "app", "main.py")],
         "env_add": {"PYTHONPATH": os.path.join(os.getcwd(), "backend", "app")}
     },
     {

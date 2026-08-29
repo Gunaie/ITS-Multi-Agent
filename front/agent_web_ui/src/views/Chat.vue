@@ -329,6 +329,13 @@ const handleSend = async () => {
        app_type: 'agent'
      },
       (event) => {
+      if (event.type === 'error') {
+        botMsg.content = event.message || '抱歉，系统执行过程中发生错误。'
+        botMsg.loading = false
+        loading.value = false
+        return
+      }
+      
       if (event.type === 'agent_updated_stream_event') {
         currentAgentName = event.new_agent
         botMsg.thinkingSteps.push({
@@ -356,8 +363,8 @@ const handleSend = async () => {
           if (event.content) {
             botMsg.content += event.content
             
-            // 实时解析引用来源 (例如: 【资料1】 或 [文件名.md])
-            const sourceRegex = /【资料(\d+)】|\[([\w\-. ]+\.md)\]/g
+            // 实时解析引用来源 (支持 [文件名.md] 格式)
+            const sourceRegex = /\[([\w\-. ]+\.md)\]/g
             const matches = botMsg.content.match(sourceRegex)
             if (matches) {
               const uniqueSources = [...new Set(matches.map(m => m.replace(/[\[\]]/g, '')))]

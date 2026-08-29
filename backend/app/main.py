@@ -146,26 +146,54 @@ def extract_text(obj, include_reasoning=False):
     if isinstance(obj, str): return obj
     if isinstance(obj, list): return "".join([extract_text(i, include_reasoning) for i in obj])
     
-    # 处理 OpenAI 风格的 Message/Delta 对象
-    content = getattr(obj, "content", None)
-    reasoning = getattr(obj, "reasoning_content", None)
-    
-    if content is None and isinstance(obj, dict):
-        content = obj.get("content")
-        reasoning = obj.get("reasoning_content")
-    
     res = ""
-    if include_reasoning and reasoning:
-        res += f"**[思考过程]**\n{reasoning}\n\n---\n\n"
+    reasoning_attr = None
+    content_attr = None
     
-    if content:
-        if isinstance(content, str):
-            res += content
+    # 1. 尝试获取 content 和 reasoning (处理 OpenAI 风格对象)
+    content_attr = getattr(obj, "content", None)
+    reasoning_attr = getattr(obj, "reasoning_content", None)
+    
+    # 2. 处理 ResponseOutputText / ResponseOutputMessage / ResponseOutputReasoningText 等新类型
+    if not content_attr:
+        content_attr = getattr(obj, "text", None)
+    if not reasoning_attr:
+        reasoning_attr = getattr(obj, "reasoning", None)
+        
+    # 3. 处理字典格式
+    if isinstance(obj, dict):
+        content_attr = content_attr or obj.get("content")
+        reasoning_attr = reasoning_attr or obj.get("reasoning_content") or obj.get("reasoning")
+        # 处理 choices 结构 (ChatCompletion 或 ChatCompletionChunk)
+        if "choices" in obj and len(obj["choices"]) > 0:
+            choice = obj["choices"][0]
+            delta = choice.get("delta", {})
+            message = choice.get("message", {})
+            content_attr = content_attr or delta.get("content") or message.get("content")
+            reasoning_attr = reasoning_attr or delta.get("reasoning_content") or message.get("reasoning_content")
+    
+    # 4. 处理 ChatCompletionChunk / ChatCompletion 对象
+    if hasattr(obj, "choices") and len(obj.choices) > 0:
+        choice = obj.choices[0]
+        if hasattr(choice, "delta"):
+            content_attr = content_attr or getattr(choice.delta, "content", None)
+            reasoning_attr = reasoning_attr or getattr(choice.delta, "reasoning_content", None)
+        elif hasattr(choice, "message"):
+            content_attr = content_attr or getattr(choice.message, "content", None)
+            reasoning_attr = reasoning_attr or getattr(choice.message, "reasoning_content", None)
+
+    if include_reasoning and reasoning_attr:
+        res += f"**[思考过程]**\n{reasoning_attr}\n\n---\n\n"
+    
+    if content_attr:
+        if isinstance(content_attr, str):
+            res += content_attr
         else:
-            res += extract_text(content, include_reasoning)
+            # 可能是列表或其他对象，递归提取
+            res += extract_text(content_attr, include_reasoning)
             
-    # 备选：text 属性
-    if not res:
+    # 备选：text 属性 (兜底)
+    if not res and not reasoning_attr:
         text = getattr(obj, "text", None) or (obj.get("text") if isinstance(obj, dict) else None)
         if text: res = str(text)
         
@@ -197,21 +225,18 @@ def save_session(session_id: str, session: Session, user_id: str = None, app_typ
             redis_client.zadd(f"user_sessions:{app_type}:{user_id}", {session_id: time.time()})
             # 记录会话的元数据（如标题）
             if not redis_client.exists(f"session_meta:{session_id}"):
-                # 初始标题使用第一条提问的前10个字
+                # 初始标题使用第一条提问的前15个字
                 title = "新对话"
                 if hasattr(session, 'items') and len(session.items) > 0:
                     first_msg = session.items[0]
-                    # 处理 dict 或 ResponseInputItemParam 对象
-                    content = ""
+                    # 使用统一的 extract_text 提取内容
+                    raw_content = ""
                     if isinstance(first_msg, dict):
-                        content = first_msg.get("content", "")
+                        raw_content = first_msg.get("content", "")
                     elif hasattr(first_msg, "content"):
-                         if isinstance(first_msg.content, list):
-                             for part in first_msg.content:
-                                 if hasattr(part, "text"): content += part.text
-                         elif isinstance(first_msg.content, str):
-                             content = first_msg.content
+                        raw_content = first_msg.content
                     
+                    content = extract_text(raw_content, include_reasoning=False)
                     if content:
                         title = content[:15] + ("..." if len(content) > 15 else "")
                 
@@ -322,7 +347,7 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
             input=chat_request.question, 
             session=session,
             context=session,
-            run_config=RunConfig(tracing_disabled=True, max_turns=15)
+            run_config=RunConfig(tracing_disabled=True)
         )
         logger.info("Agent Runner finished successfully")
         
@@ -392,7 +417,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 input=chat_request.question, 
                 session=session,
                 context=session,
-                run_config=RunConfig(tracing_disabled=True, max_turns=15)
+                run_config=RunConfig(tracing_disabled=True)
             )
             
             full_reasoning = ""
@@ -401,76 +426,78 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 async with asyncio.timeout(60.0):
                     async for event in stream.stream_events():
                         # 根据事件类型封装成 SSE 格式
-                        # 过滤掉一些过于琐碎的原始响应事件，只发送关键的 run_item_stream_event 和 agent_updated_stream_event
-                        
+                        event_type = str(event.type)
+                        if "." in event_type: # 处理 Enum 字符串，如 "EventType.run_item_stream_event" -> "run_item_stream_event"
+                            event_type = event_type.split(".")[-1]
+                            
                         event_data = {
-                            "type": str(event.type),
+                            "type": event_type,
                         }
                         
-                        if event.type == "run_item_stream_event":
-                            event_data["name"] = str(event.name)
-                            item = event.item
-                            event_data["item_type"] = str(item.type)
+                        # 核心逻辑：处理流式输出项目
+                        if event_type == "run_item_stream_event":
+                            if not hasattr(event, "item") or not event.item:
+                                continue
                             
-                            if item.type == "message_output_item":
-                                # 消息内容输出
-                                content = ""
-                                reasoning_content = ""
+                            event_data["name"] = str(getattr(event, "name", ""))
+                            item = event.item
+                            item_type = str(item.type)
+                            if "." in item_type:
+                                item_type = item_type.split(".")[-1]
+                            event_data["item_type"] = item_type
+                            
+                            if item_type == "message_output_item":
+                                # 消息内容输出 (通常是最终完整消息)
+                                # 注意：为了避免与 raw_response_event 中的实时 delta 重复导致前端显示双倍内容，
+                                # 我们在此处仅记录日志，不重复发送 content 给前端。
+                                # 除非 raw_response_event 没有触发（非流式情况），但 run_streamed 通常都会触发 delta。
                                 raw = item.raw_item
-                                
-                                # 使用全局 extract_text
-                                content = extract_text(raw)
-                                reasoning_content = ""
-                                
-                                # 尝试直接从 raw 对象获取推理内容（OpenAI 格式）
-                                if hasattr(raw, "choices") and len(raw.choices) > 0:
-                                     delta = raw.choices[0].delta
-                                     reasoning_content = getattr(delta, "reasoning_content", "")
-                                elif isinstance(raw, dict):
-                                    choices = raw.get("choices", [])
-                                    if choices:
-                                        reasoning_content = choices[0].get("delta", {}).get("reasoning_content", "")
-                                
-                                # 策略性优化：如果模型在 content 中输出了“思考过程”，则手动截断并移入 reasoning_content
-                                if "思考过程" in content and not reasoning_content:
-                                    parts = content.split("思考过程", 1)
-                                    if len(parts) > 1:
-                                        # 找到后续的正文开始位置（通常是下一个标题或空行）
-                                        remaining = parts[1]
-                                        # 如果有明显的正文标识（如 ### 或 1. ），尝试分离
-                                        if "\n\n" in remaining:
-                                            thought_part, real_content = remaining.split("\n\n", 1)
-                                            # 如果 real_content 看起来像正文（包含网点信息等）
-                                            if any(k in real_content for k in ["维修站", "服务中心", "地址", "电话"]):
-                                                reasoning_content = thought_part.strip()
-                                                content = real_content.strip()
-                                
-                                event_data["content"] = content
-                                if reasoning_content:
-                                    event_data["reasoning_content"] = reasoning_content
-                                    full_reasoning += reasoning_content
-                            elif item.type == "tool_call_item":
+                                logger.debug(f"Final message item received: {type(raw)}")
+                                    
+                            elif item_type == "tool_call_item":
                                 tool_name = ""
-                                if hasattr(item.raw_item, "function"):
-                                    tool_name = item.raw_item.function.get("name", "")
-                                elif hasattr(item.raw_item, "name"):
-                                    tool_name = item.raw_item.name
-                                elif isinstance(item.raw_item, dict):
-                                    tool_name = item.raw_item.get("name") or item.raw_item.get("function", {}).get("name", "")
+                                raw_item = item.raw_item
+                                if hasattr(raw_item, "function"):
+                                    tool_name = raw_item.function.get("name", "")
+                                elif hasattr(raw_item, "name"):
+                                    tool_name = raw_item.name
+                                elif isinstance(raw_item, dict):
+                                    tool_name = raw_item.get("name") or raw_item.get("function", {}).get("name", "")
                                 event_data["tool_name"] = str(tool_name)
-                            elif item.type == "tool_call_output_item":
+                                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                                
+                            elif item_type == "tool_call_output_item":
                                  output = ""
-                                 if hasattr(item.raw_item, "output"):
-                                     output = item.raw_item.output
-                                 elif isinstance(item.raw_item, dict):
-                                     output = item.raw_item.get("output", "")
+                                 raw_item = item.raw_item
+                                 if hasattr(raw_item, "output"):
+                                     output = raw_item.output
+                                 elif isinstance(raw_item, dict):
+                                     output = raw_item.get("output", "")
                                  event_data["output"] = str(output)
+                                 yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
                         
-                        elif event.type == "agent_updated_stream_event":
-                            event_data["new_agent"] = str(event.new_agent.name)
-                        
-                        # 发送 SSE 数据包，使用 default=str 确保所有不可序列化对象转为字符串
-                        yield f"data: {json.dumps(event_data, ensure_ascii=False, default=str)}\n\n"
+                        # 处理实时 Raw Delta (解决咨询平台无回复的关键)
+                        elif event_type == "raw_response_event":
+                            data = event.data
+                            sub_type = getattr(data, "type", "")
+                            if sub_type == "response.output_text.delta":
+                                event_data["type"] = "run_item_stream_event"
+                                event_data["item_type"] = "message_output_item"
+                                event_data["content"] = getattr(data, "delta", "") or ""
+                                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                            elif sub_type == "response.output_reasoning_text.delta":
+                                event_data["type"] = "run_item_stream_event"
+                                event_data["item_type"] = "message_output_item"
+                                reasoning = getattr(data, "delta", "") or ""
+                                event_data["reasoning_content"] = reasoning
+                                full_reasoning += reasoning
+                                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+                        elif event_type == "agent_updated_stream_event":
+                            if hasattr(event, "new_agent") and event.new_agent:
+                                event_data["new_agent"] = str(getattr(event.new_agent, "name", "未知智能体"))
+                                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
             except (asyncio.TimeoutError, TimeoutError):
                 logger.error("Streaming chat timed out after 60s")
                 yield f"data: {json.dumps({'type': 'error', 'message': '响应超时，请尝试提供更具体的地点或稍后重试。'}, ensure_ascii=False)}\n\n"
@@ -478,8 +505,16 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             # 结束后，将累积的推理过程存入会话历史中最后一个助手消息，确保持久化
             if full_reasoning and hasattr(session, 'items') and len(session.items) > 0:
                 last_item = session.items[-1]
+                # 兼容处理字典和对象
                 if isinstance(last_item, dict) and last_item.get("role") == "assistant":
                     last_item["reasoning_content"] = full_reasoning
+                elif hasattr(last_item, "role") and getattr(last_item, "role") == "assistant":
+                    # 如果是对象且支持动态设置属性
+                    try:
+                        setattr(last_item, "reasoning_content", full_reasoning)
+                    except:
+                        # 如果不可变，则跳过或记录日志
+                        pass
             
             # 保存会话状态到 Redis (包含 app_type 分离)
             save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
@@ -488,8 +523,8 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             yield "data: [DONE]\n\n"
             
         except Exception as e:
-            logger.error(f"Error in streaming chat: {str(e)}")
-            error_msg = json.dumps({"type": "error", "message": "服务内部错误"}, ensure_ascii=False)
+            logger.error(f"Error in streaming chat: {str(e)}", exc_info=True)
+            error_msg = json.dumps({"type": "error", "message": f"服务内部错误: {str(e)}"}, ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
