@@ -10,33 +10,28 @@ set_tracing_disabled(True)
 from agents import Agent, ModelSettings
 from infrastructure.ai.openai_client import sub_model
 from infrastructure.tools.local.service_station import (
-    resolve_user_location_from_text,
-    query_nearest_repair_shops_by_coords,
+    get_nearby_official_repair_stations,
     map_uri
 )
-from infrastructure.tools.local.amap_tool import bailian_amap_search
+# 移除冗余的子工具导入，仅保留高速集成工具
+# resolve_user_location_from_text 也不再直接暴露给 Agent，由集成工具内部调用
 
-from infrastructure.tools.mcp.mcp_servers import (
-    amap_map_mcp,
-)
 from infrastructure.ai.prompt_loader import load_prompt
 
 # 16. 定义服务智能体
 comprehensive_service_agent = Agent(
     name="业务服务专家",
     instructions=load_prompt("comprehensive_service_agent"),
-    handoff_description="专门处理维修站查询、地理位置定位、周边服务点搜索以及地图导航指引。当用户询问“哪里有”、“怎么去”或涉及地点、服务网点时，请交接给此专家。",
+    handoff_description="专门处理维修站查询、地理位置定位、周边服务点搜索以及地图导航指引。当用户询问“哪里有”、“怎么去”或涉及地点、服务网网点时，请交接给此专家。",
     model=sub_model,
     model_settings=ModelSettings(
         temperature=0,
         max_tokens=2048,
     ),
-    # 本地工具：包含服务站查询、高德地图搜索和导航链接生成
+    # 仅保留高速集成工具和导航工具，彻底杜绝模型链式调用
     tools=[
-        resolve_user_location_from_text,
-        query_nearest_repair_shops_by_coords,
-        map_uri,
-        bailian_amap_search
+        get_nearby_official_repair_stations,
+        map_uri
     ],
     # mcp_servers 将在运行时由调度者根据连接情况动态注入
 )

@@ -38,7 +38,7 @@ class Settings(BaseSettings):
         description="主模型名称"
     )
     SUB_MODEL_NAME: Optional[str] = Field(
-        default="qwen3.8-flash",
+        default="qwen3.7-flash",
         description="子模型名称"
     )
 
@@ -73,8 +73,11 @@ class Settings(BaseSettings):
     # ==================== Pydantic Settings 配置 ====================
 
     model_config = SettingsConfigDict(
-        # 计算.env文件的绝对路径：config目录的父目录(app目录)下的.env
-        env_file=str(Path(__file__).parent.parent / ".env"),
+        # 优先从当前目录的父目录（app目录）寻找 .env，如果找不到，再尝试从项目的根目录寻找
+        env_file=[
+            str(Path(__file__).parent.parent / ".env"),
+            str(Path(__file__).parent.parent.parent / ".env")
+        ],
         env_file_encoding="utf-8",          # .env文件编码
         case_sensitive=True,                 # 环境变量名大小写敏感
         extra="ignore",                      # 忽略额外的环境变量

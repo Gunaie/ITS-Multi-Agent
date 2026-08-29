@@ -23,7 +23,7 @@ async def on_handoff_service(ctx: RunContextWrapper):
 orchestrator_agent = Agent(
     name="智能调度专家",
     instructions=load_prompt("orchestrator"),
-    model=main_model,
+    model=sub_model, # 使用更快的 Flash 模型进行路由决策
     model_settings=ModelSettings(temperature=0),
     handoffs=[
         handoff(

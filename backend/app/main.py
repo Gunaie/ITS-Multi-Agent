@@ -1,5 +1,16 @@
 import os
 import sys
+
+# 立即设置 Python 路径以支持 common 和内部模块
+# 使用绝对路径以确保在不同工作目录下都能正确识别
+current_file_path = os.path.abspath(__file__)
+current_dir = os.path.dirname(current_file_path)
+parent_dir = os.path.dirname(current_dir)
+
+# 强制插入路径，确保优先级
+sys.path.insert(0, parent_dir)
+sys.path.insert(0, current_dir)
+
 from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -15,9 +26,6 @@ from common.infrastructure.auth.deps import get_current_user
 from common.infrastructure.limiter import limiter
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-
-# 将当前目录添加到 Python 路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 强制设置 sys.stdout 编码为 utf-8 以防止 Windows 下的 UnicodeEncodeError
 if sys.platform == "win32":
@@ -65,19 +73,50 @@ async def startup_event():
     
     # 预连接 MCP 服务并注入子智能体，使用异步任务防止阻塞启动
     async def init_mcp():
-        try:
-            await search_mac_client.connect()
-            technical_agent.mcp_servers = [search_mac_client]
-            logger.info("Connected to MCP Search service.")
-        except Exception as e:
-            logger.warning(f"Failed to connect to MCP Search service: {e}")
+        logger.info("Starting background MCP connection task...")
+        # 针对 Python 3.11+ 的 ExceptionGroup 进行处理
+        import sys
+        
+        for i in range(3):
+            try:
+                # 增加 8 秒硬超时，防止连接挂起，比并行任务稍长一点
+                async def connect_safe(client, name):
+                    try:
+                        await asyncio.wait_for(client.connect(), timeout=5.0)
+                        logger.info(f"Successfully connected to MCP {name} service.")
+                        return True
+                    except (asyncio.TimeoutError, TimeoutError):
+                        logger.warning(f"MCP {name} connection timed out.")
+                        return False
+                    except Exception as e:
+                        # 捕获包括 ExceptionGroup 在内的所有异常
+                        logger.warning(f"MCP {name} connection failed with error: {type(e).__name__}: {e}")
+                        return False
+
+                # 并行执行连接任务，使用 return_exceptions=True 确保 gather 不会因其中一个失败而崩溃
+                results = await asyncio.gather(
+                    connect_safe(search_mac_client, "Search"),
+                    connect_safe(amap_map_mcp, "Map"),
+                    return_exceptions=True
+                )
+                
+                search_ok = results[0] if isinstance(results[0], bool) else False
+                map_ok = results[1] if isinstance(results[1], bool) else False
+                
+                if search_ok:
+                    technical_agent.mcp_servers = [search_mac_client]
+                
+                if map_ok:
+                    comprehensive_service_agent.mcp_servers = [amap_map_mcp]
+                
+                if search_ok and map_ok:
+                    logger.info("All MCP services are ready.")
+                    break
+            except Exception as e:
+                logger.error(f"MCP connection iteration {i+1} encountered unexpected error: {e}")
             
-        try:
-            await amap_map_mcp.connect()
-            comprehensive_service_agent.mcp_servers = [amap_map_mcp]
-            logger.info("Connected to MCP Map service.")
-        except Exception as e:
-            logger.warning(f"Failed to connect to MCP Map service: {e}")
+            await asyncio.sleep(2)
+        logger.info("Background MCP connection task finished.")
             
     asyncio.create_task(init_mcp())
 
@@ -350,7 +389,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             if chat_request.location:
                 session.context["user_location"] = chat_request.location
             
-            # 使用 run_streamed 启动流式运行，传入 session 和 context
+            # 使用 run_streamed 启动流式运行，传入 session 和 context，增加 60s 强制超时
             stream = Runner.run_streamed(
                 orchestrator_agent, 
                 input=chat_request.question, 
@@ -359,63 +398,91 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 run_config=RunConfig(tracing_disabled=False)
             )
             
-            async for event in stream.stream_events():
-                # 根据事件类型封装成 SSE 格式
-                # 过滤掉一些过于琐碎的原始响应事件，只发送关键的 run_item_stream_event 和 agent_updated_stream_event
-                
-                event_data = {
-                    "type": str(event.type),
-                }
-                
-                if event.type == "run_item_stream_event":
-                    event_data["name"] = str(event.name)
-                    item = event.item
-                    event_data["item_type"] = str(item.type)
-                    
-                    if item.type == "message_output_item":
-                        # 消息内容输出
-                        content = ""
-                        reasoning_content = ""
-                        raw = item.raw_item
+            full_reasoning = ""
+            # 为了在 SSE 中优雅处理超时，我们使用 asyncio.timeout 包装整个生成逻辑
+            try:
+                async with asyncio.timeout(60.0):
+                    async for event in stream.stream_events():
+                        # 根据事件类型封装成 SSE 格式
+                        # 过滤掉一些过于琐碎的原始响应事件，只发送关键的 run_item_stream_event 和 agent_updated_stream_event
                         
-                        # 使用全局 extract_text
-                        content = extract_text(raw)
-                        reasoning_content = ""
+                        event_data = {
+                            "type": str(event.type),
+                        }
                         
-                        # 尝试直接从 raw 对象获取推理内容（OpenAI 格式）
-                        if hasattr(raw, "choices") and len(raw.choices) > 0:
-                             delta = raw.choices[0].delta
-                             reasoning_content = getattr(delta, "reasoning_content", "")
-                        elif isinstance(raw, dict):
-                            choices = raw.get("choices", [])
-                            if choices:
-                                reasoning_content = choices[0].get("delta", {}).get("reasoning_content", "")
+                        if event.type == "run_item_stream_event":
+                            event_data["name"] = str(event.name)
+                            item = event.item
+                            event_data["item_type"] = str(item.type)
+                            
+                            if item.type == "message_output_item":
+                                # 消息内容输出
+                                content = ""
+                                reasoning_content = ""
+                                raw = item.raw_item
+                                
+                                # 使用全局 extract_text
+                                content = extract_text(raw)
+                                reasoning_content = ""
+                                
+                                # 尝试直接从 raw 对象获取推理内容（OpenAI 格式）
+                                if hasattr(raw, "choices") and len(raw.choices) > 0:
+                                     delta = raw.choices[0].delta
+                                     reasoning_content = getattr(delta, "reasoning_content", "")
+                                elif isinstance(raw, dict):
+                                    choices = raw.get("choices", [])
+                                    if choices:
+                                        reasoning_content = choices[0].get("delta", {}).get("reasoning_content", "")
+                                
+                                # 策略性优化：如果模型在 content 中输出了“思考过程”，则手动截断并移入 reasoning_content
+                                if "思考过程" in content and not reasoning_content:
+                                    parts = content.split("思考过程", 1)
+                                    if len(parts) > 1:
+                                        # 找到后续的正文开始位置（通常是下一个标题或空行）
+                                        remaining = parts[1]
+                                        # 如果有明显的正文标识（如 ### 或 1. ），尝试分离
+                                        if "\n\n" in remaining:
+                                            thought_part, real_content = remaining.split("\n\n", 1)
+                                            # 如果 real_content 看起来像正文（包含网点信息等）
+                                            if any(k in real_content for k in ["维修站", "服务中心", "地址", "电话"]):
+                                                reasoning_content = thought_part.strip()
+                                                content = real_content.strip()
+                                
+                                event_data["content"] = content
+                                if reasoning_content:
+                                    event_data["reasoning_content"] = reasoning_content
+                                    full_reasoning += reasoning_content
+                            elif item.type == "tool_call_item":
+                                tool_name = ""
+                                if hasattr(item.raw_item, "function"):
+                                    tool_name = item.raw_item.function.get("name", "")
+                                elif hasattr(item.raw_item, "name"):
+                                    tool_name = item.raw_item.name
+                                elif isinstance(item.raw_item, dict):
+                                    tool_name = item.raw_item.get("name") or item.raw_item.get("function", {}).get("name", "")
+                                event_data["tool_name"] = str(tool_name)
+                            elif item.type == "tool_call_output_item":
+                                 output = ""
+                                 if hasattr(item.raw_item, "output"):
+                                     output = item.raw_item.output
+                                 elif isinstance(item.raw_item, dict):
+                                     output = item.raw_item.get("output", "")
+                                 event_data["output"] = str(output)
                         
-                        event_data["content"] = content
-                        if reasoning_content:
-                            event_data["reasoning_content"] = reasoning_content
-                    elif item.type == "tool_call_item":
-                        tool_name = ""
-                        if hasattr(item.raw_item, "function"):
-                            tool_name = item.raw_item.function.get("name", "")
-                        elif hasattr(item.raw_item, "name"):
-                            tool_name = item.raw_item.name
-                        elif isinstance(item.raw_item, dict):
-                            tool_name = item.raw_item.get("name") or item.raw_item.get("function", {}).get("name", "")
-                        event_data["tool_name"] = str(tool_name)
-                    elif item.type == "tool_call_output_item":
-                         output = ""
-                         if hasattr(item.raw_item, "output"):
-                             output = item.raw_item.output
-                         elif isinstance(item.raw_item, dict):
-                             output = item.raw_item.get("output", "")
-                         event_data["output"] = str(output)
-                
-                elif event.type == "agent_updated_stream_event":
-                    event_data["new_agent"] = str(event.new_agent.name)
-                
-                # 发送 SSE 数据包，使用 default=str 确保所有不可序列化对象转为字符串
-                yield f"data: {json.dumps(event_data, ensure_ascii=False, default=str)}\n\n"
+                        elif event.type == "agent_updated_stream_event":
+                            event_data["new_agent"] = str(event.new_agent.name)
+                        
+                        # 发送 SSE 数据包，使用 default=str 确保所有不可序列化对象转为字符串
+                        yield f"data: {json.dumps(event_data, ensure_ascii=False, default=str)}\n\n"
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.error("Streaming chat timed out after 60s")
+                yield f"data: {json.dumps({'type': 'error', 'message': '响应超时，请尝试提供更具体的地点或稍后重试。'}, ensure_ascii=False)}\n\n"
+            
+            # 结束后，将累积的推理过程存入会话历史中最后一个助手消息，确保持久化
+            if full_reasoning and hasattr(session, 'items') and len(session.items) > 0:
+                last_item = session.items[-1]
+                if isinstance(last_item, dict) and last_item.get("role") == "assistant":
+                    last_item["reasoning_content"] = full_reasoning
             
             # 保存会话状态到 Redis (包含 app_type 分离)
             save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)

@@ -4,7 +4,6 @@ from agents import function_tool, RunContextWrapper
 from config.settings import settings
 from common.infrastructure.logging.logger import logger
 
-@function_tool
 async def bailian_amap_search(ctx: RunContextWrapper, query: str) -> str:
     """
     使用高德地图服务查询地点、周边设施、路线规划或地理编码信息。
@@ -49,7 +48,8 @@ async def bailian_amap_search(ctx: RunContextWrapper, query: str) -> str:
         if not api_key or api_key.startswith("sk-your-key"):
              return "未检测到有效的 AL_BAILIAN_API_KEY，无法使用高德地图服务。"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # 移除过严的 MCP 初始化检查，允许直接调用百炼 API 插件
+        async with httpx.AsyncClient(timeout=8.0) as client:
             # 使用百炼统一的 Chat 接口驱动插件
             url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
             headers["X-DashScope-Plugin"] = "amap_maps" # 关键请求头
@@ -61,23 +61,10 @@ async def bailian_amap_search(ctx: RunContextWrapper, query: str) -> str:
                 text = data.get("output", {}).get("text")
                 if text and "抱歉" not in text and "无法" not in text:
                     return f"【高德地图实时数据】\n{text}"
-                
-                # 如果插件返回了结构化数据但没有 text，尝试提取
-                choices = data.get("output", {}).get("choices", [])
-                if choices:
-                    plugin_content = choices[0].get("message", {}).get("content", "")
-                    if plugin_content:
-                        return f"【高德地图实时数据】\n{plugin_content}"
             
             logger.warning(f"高德地图 API 未能返回有效结果: {response.text}")
             
-        # 终极兜底：如果 API 失败或结果不理想，尝试用联网搜索工具代为查询
-        search_query = f"{location or ''} {query} 地址 电话"
-        search_result = await bailian_web_search.__wrapped__(search_query)
-        if search_result and "抱歉" not in search_result:
-            return f"【联网搜索数据】\n{search_result}"
-            
-        return f"在线地图服务暂时繁忙。建议您直接点击此处：[高德地图搜索 {query}](https://www.amap.com/search?query={query})"
+        return f"在线地图服务暂时不可用。建议您直接搜索：[高德地图搜索 {query}](https://www.amap.com/search?query={query})"
     except Exception as e:
         logger.error(f"高德地图工具执行失败: {str(e)}")
-        return f"地图服务连接超时，请稍后再试。"
+        return f"地图服务连接繁忙，建议使用本地数据核验。"
