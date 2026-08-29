@@ -19,7 +19,7 @@ async def query_knowledge(question: str) -> str:
     payload = {"question": question}
     
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             logger.info(f"Querying knowledge base at {url} with question: {question}")
             response = await client.post(url, json=payload)
             logger.info(f"Knowledge base response status: {response.status_code}")

@@ -3,7 +3,7 @@ from infrastructure.ai.openai_client import main_model, sub_model
 from infrastructure.ai.prompt_loader import load_prompt
 from multi_agent.technical_agent import technical_agent
 from multi_agent.service_agent import comprehensive_service_agent
-from infrastructure.tools.mcp.mcp_servers import search_mac_client, amap_map_mcp
+from infrastructure.tools.mcp.mcp_servers import search_mac_client
 
 from common.infrastructure.logging.logger import logger
 
@@ -15,9 +15,7 @@ async def on_handoff_technical(ctx: RunContextWrapper):
 
 async def on_handoff_service(ctx: RunContextWrapper):
     logger.info(f"Orchestrator: Handing off to Service Expert")
-    # 检查核心 MCP 服务是否就绪
-    if not comprehensive_service_agent.mcp_servers:
-        logger.warning("Service Expert has no MCP servers connected. Location services may be unavailable.")
+    # 百度地图已通过 REST API 集成，无需额外 MCP 检查
 
 # 定义 Orchestrator Agent
 orchestrator_agent = Agent(

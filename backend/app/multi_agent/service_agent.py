@@ -46,12 +46,7 @@ async def run_single_test(case_name: str, input_text: str):
     print(f"输入: \"{input_text}\"")
     print("-" * 80)
     try:
-        try:
-            await amap_map_mcp.connect()
-            print("已连接到 MCP 地图服务...")
-        except Exception as e:
-            print(f"警告: MCP 地图服务连接失败 ({e})，将使用本地工具。")
-            
+        # 百度地图 API 已集成在集成工具内部，无需手动连接 MCP
         print("⏳ 思考中...")
         # result = await Runner.run(comprehensive_service_agent, input=input_text)
 
@@ -79,10 +74,7 @@ async def run_single_test(case_name: str, input_text: str):
     except Exception as e:
         print(f"\n Error: {e}\n")
     finally:
-        try:
-            await amap_map_mcp.cleanup()
-        except:
-            pass
+        pass
 
 
 async def main():

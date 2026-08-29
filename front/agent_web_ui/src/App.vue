@@ -398,11 +398,14 @@ body {
 
 .shortcut {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-sub);
-  background: #F1F5F9;
+  background: var(--divider-color);
   padding: 2px 6px;
   border-radius: 4px;
+  border: 1px solid var(--border-color);
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
 }
 
 .sidebar-menu {

@@ -1,70 +1,99 @@
 
 import httpx
-from agents import function_tool, RunContextWrapper
+from agents import RunContextWrapper
 from config.settings import settings
 from common.infrastructure.logging.logger import logger
 
-async def bailian_amap_search(ctx: RunContextWrapper, query: str) -> str:
+async def amap_geocode(address: str) -> str:
     """
-    使用高德地图服务查询地点、周边设施、路线规划或地理编码信息。
-    当用户提到“哪里有”、“怎么去”、“最近的...在哪里”或查询特定位置时，必须使用此工具。
-    
-    Args:
-        query: 搜索关键词或位置描述
-        
-    Returns:
-        str: 地图搜索结果摘要
+    使用高德地图地理编码 API 将地址转换为经纬度
     """
-    api_key = settings.AL_BAILIAN_API_KEY
-    # 高德地图在百炼上的工具调用通常也是通过统一的 API 接口
-    url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/amap-maps/search"
+    api_key = settings.AMAP_API_KEY
+    if not api_key:
+        return ""
     
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    # 尝试从上下文中获取位置信息，增强搜索精度
-    session = ctx.context
-    location = None
-    if session and hasattr(session, 'context'):
-        location = session.context.get("user_location")
-    
-    # 构造百炼插件调用的标准 Payload
-    payload = {
-        "model": "qwen-plus",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"请帮我查询附近的 {query}。当前坐标为：{location or '北京市中心'}"
-            }
-        ],
-        "plugins": {
-            "amap_maps": {}
-        }
+    url = "https://restapi.amap.com/v3/geocode/geo"
+    params = {
+        "key": api_key,
+        "address": address
     }
     
     try:
-        if not api_key or api_key.startswith("sk-your-key"):
-             return "未检测到有效的 AL_BAILIAN_API_KEY，无法使用高德地图服务。"
-
-        # 移除过严的 MCP 初始化检查，允许直接调用百炼 API 插件
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            # 使用百炼统一的 Chat 接口驱动插件
-            url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-            headers["X-DashScope-Plugin"] = "amap_maps" # 关键请求头
-            
-            response = await client.post(url, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url, params=params)
             if response.status_code == 200:
                 data = response.json()
-                # 提取插件返回的真实地点信息
-                text = data.get("output", {}).get("text")
-                if text and "抱歉" not in text and "无法" not in text:
-                    return f"【高德地图实时数据】\n{text}"
-            
-            logger.warning(f"高德地图 API 未能返回有效结果: {response.text}")
-            
-        return f"在线地图服务暂时不可用。建议您直接搜索：[高德地图搜索 {query}](https://www.amap.com/search?query={query})"
+                if data.get("status") == "1" and data.get("geocodes"):
+                    location = data["geocodes"][0]["location"] # "lng,lat"
+                    lng, lat = location.split(",")
+                    return f"{lat},{lng}"
     except Exception as e:
-        logger.error(f"高德地图工具执行失败: {str(e)}")
-        return f"地图服务连接繁忙，建议使用本地数据核验。"
+        logger.error(f"高德地理编码失败: {e}")
+    return ""
+
+async def amap_around_search(coords: str, keywords: str, radius: int = 50000) -> list:
+    """
+    使用高德地图周边搜索 API 查询 POI
+    coords: "lat,lng"
+    """
+    api_key = settings.AMAP_API_KEY
+    if not api_key:
+        return []
+    
+    lat, lng = coords.split(",")
+    url = "https://restapi.amap.com/v3/place/around"
+    params = {
+        "key": api_key,
+        "location": f"{lng},{lat}", # 高德 API 要求 lng,lat
+        "keywords": keywords,
+        "radius": radius,
+        "offset": 10,
+        "page": 1,
+        "extensions": "all"
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "1":
+                    return data.get("pois", [])
+    except Exception as e:
+        logger.error(f"高德周边搜索失败: {e}")
+    return []
+
+async def bailian_amap_search(ctx: RunContextWrapper, query: str) -> str:
+    """
+    兼容原有的百炼接口定义，但内部切换为官方 API 以提高稳定性
+    """
+    api_key = settings.AMAP_API_KEY
+    if not api_key:
+        return "未配置 AMAP_API_KEY，请在 .env 文件中设置。"
+    
+    # 如果 query 看起来像是在搜坐标
+    if "坐标" in query or "经纬度" in query:
+        address = query.replace("的精确经纬度坐标", "").replace("经纬度坐标", "").strip()
+        coords = await amap_geocode(address)
+        if coords:
+            return f"地址 {address} 的坐标为: {coords}"
+    
+    # 普通周边搜索
+    session = ctx.context
+    location = "30.5928,114.3055" # 默认武汉
+    if session and hasattr(session, 'context'):
+        location = session.context.get("user_location", location)
+    
+    pois = await amap_around_search(location, query)
+    if not pois:
+        return f"在高德地图中未找到与 '{query}' 相关的结果。"
+    
+    results = []
+    for poi in pois[:5]:
+        name = poi.get("name")
+        address = poi.get("address")
+        dist = poi.get("distance")
+        tel = poi.get("tel")
+        results.append(f"- {name}\n  地址: {address}\n  电话: {tel}\n  距离: {dist}米")
+    
+    return "【高德地图实时数据】\n" + "\n".join(results)

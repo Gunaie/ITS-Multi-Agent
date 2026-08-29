@@ -59,11 +59,11 @@ async def query(request: QueryRequest):
         if not user_question:
             raise HTTPException(status_code=400, detail="查询问题不能为空")
 
-        # 2. 调用检索器的检索方法
-        retrieval_context = retrieval_service.retrieval(user_question)
+        # 2. 调用检索器的检索方法 (异步)
+        retrieval_context = await retrieval_service.retrieval(user_question)
 
-        # 3. 调用查询器的查询方法
-        answer = query_service.generate_answer(user_question, retrieval_context)
+        # 3. 调用查询器的查询方法 (异步)
+        answer = await query_service.generate_answer(user_question, retrieval_context)
 
         # 4. 封装到响应数据模型
         return QueryResponse(

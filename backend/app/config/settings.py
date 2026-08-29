@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379, description="Redis端口")
 
     # ==================== 外部服务配置 ====================
+    AMAP_API_KEY: Optional[str] = Field(default=None, description="高德地图 API Key")
+    BAIDU_MAP_AK: Optional[str] = Field(default=None, description="百度地图 API AK")
 
     # 知识库服务
     KNOWLEDGE_BASE_URL: Optional[str] = Field(

@@ -99,15 +99,16 @@
           <div class="input-actions">
             <div 
               class="location-status" 
-              :class="{ 'has-location': !!userLocation, 'is-loading': locationLoading }" 
+              :class="{ 'has-location': !!userLocation, 'is-loading': locationLoading, 'location-error': !userLocation && !locationLoading }" 
               @click="getUserLocation"
               title="点击获取或刷新实时位置"
             >
               <el-icon :class="{ 'is-loading': locationLoading }">
                 <Loading v-if="locationLoading" />
+                <Warning v-else-if="!userLocation" />
                 <Location v-else />
               </el-icon>
-              <span>{{ locationLoading ? '正在定位...' : (userLocation ? (userLocation.includes(',') ? '已获取实时位置' : `位置: ${userLocation}`) : '未获取位置') }}</span>
+              <span>{{ locationLoading ? '正在定位...' : (userLocation ? (userLocation.includes(',') ? '已获取实时位置' : `位置: ${userLocation}`) : '未获取位置 (建议手动设置)') }}</span>
             </div>
             <el-button 
               type="primary" 
@@ -132,8 +133,16 @@
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { chatWithAgent, chatStreamWithAgent, getSessionDetail } from '@/api/app'
 import { marked } from 'marked'
-import { Monitor, Location, Download, Position, Loading, List, ArrowDown } from '@element-plus/icons-vue'
+import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+// 配置 marked 渲染器，使链接在新标签页中打开
+const renderer = new marked.Renderer()
+renderer.link = ({ href, title, text }) => {
+  const titleAttr = title ? ` title="${title}"` : ''
+  return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
+}
+marked.setOptions({ renderer })
 
 const props = defineProps({
   sessionId: {
@@ -156,12 +165,32 @@ const loadSession = async (sid) => {
   loading.value = true
   try {
     const data = await getSessionDetail(sid)
-    messages.value = data.history.map(msg => ({
-      ...msg,
-      loading: false,
-      showThinking: false,
-      thinkingSteps: []
-    }))
+    messages.value = data.history.map(msg => {
+      let content = msg.content
+      let thinkingSteps = []
+      
+      // 从历史记录中提取思考过程 (后端嵌入的格式: **[思考过程]**\n...\n\n---\n\n)
+      if (msg.role === 'assistant' && content.includes('**[思考过程]**')) {
+        const parts = content.split('**[思考过程]**')
+        const thoughtPart = parts[1].split('\n\n---\n\n')
+        if (thoughtPart.length > 1) {
+          thinkingSteps.push({
+            agent: '智能调度专家 (历史推理)',
+            content: thoughtPart[0].trim(),
+            isReasoning: true
+          })
+          content = thoughtPart[1].trim()
+        }
+      }
+      
+      return {
+        ...msg,
+        content: content,
+        loading: false,
+        showThinking: false,
+        thinkingSteps: thinkingSteps
+      }
+    })
   } catch (err) {
     console.error('Load session error:', err)
   } finally {
@@ -174,36 +203,37 @@ watch(() => props.sessionId, (newSid) => {
   loadSession(newSid)
 }, { immediate: true })
 
-const getUserLocation = () => {
+const getUserLocation = (force = false) => {
   if (locationLoading.value) return
   
+  // 检查 sessionStorage 是否已有有效的经纬度 (包含逗号)
+  const savedLocation = sessionStorage.getItem('its_user_location')
+  if (!force && savedLocation && savedLocation.includes(',')) {
+    userLocation.value = savedLocation
+    console.log('Using valid saved location from session:', savedLocation)
+    return
+  }
+
   if (navigator.geolocation) {
     locationLoading.value = true
-    ElMessage.info('正在尝试获取您的实时位置...')
     
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        userLocation.value = `${position.coords.latitude},${position.coords.longitude}`
+        const coords = `${position.coords.latitude},${position.coords.longitude}`
+        userLocation.value = coords
+        sessionStorage.setItem('its_user_location', coords)
         ElMessage.success('位置获取成功')
-        console.log('User location acquired:', userLocation.value)
         locationLoading.value = false
       },
       (error) => {
         console.warn('Error getting location:', error.message)
         locationLoading.value = false
-        
-        let errorMsg = '无法获取位置'
-        if (error.code === 1) errorMsg = '定位权限被拒绝'
-        else if (error.code === 2) errorMsg = '暂时无法获取位置信息'
-        else if (error.code === 3) errorMsg = '定位请求超时'
-        
-        // 自动定位失败，转为手动输入
-        handleManualLocation(errorMsg + '，请手动输入您所在的城市：')
+        // 定位失败不弹窗干扰，交给后端 IP 定位兜底
+        userLocation.value = null
+        sessionStorage.removeItem('its_user_location')
       },
-      { timeout: 8000, enableHighAccuracy: true }
+      { timeout: 5000, enableHighAccuracy: false }
     )
-  } else {
-    handleManualLocation('浏览器不支持自动定位，请手动输入您所在的城市：')
   }
 }
 
@@ -215,6 +245,7 @@ const handleManualLocation = (customMsg) => {
     inputErrorMessage: '请输入正确的城市名称（2-20位中文）',
   }).then(({ value }) => {
     userLocation.value = value
+    sessionStorage.setItem('its_user_location', value)
     ElMessage.success(`位置已手动设为: ${value}`)
   }).catch(() => {
     ElMessage.info('已取消手动设置')
@@ -312,10 +343,11 @@ const handleSend = async () => {
             if (!lastStep || !lastStep.isReasoning) {
               lastStep = {
                 agent: currentAgentName,
-                content: '🤔 思考中: ',
+                content: '🤔 正在分析策略: ',
                 isReasoning: true
               }
               botMsg.thinkingSteps.push(lastStep)
+              botMsg.showThinking = true // 自动展开思考过程
             }
             lastStep.content += event.reasoning_content
           }
@@ -648,6 +680,7 @@ onMounted(() => {
   right: 0;
   padding: 20px 0 30px;
   background: linear-gradient(to top, var(--main-bg) 80%, transparent);
+  z-index: 100; /* 确保输入框始终在最上层 */
 }
 
 .input-box-wrapper {
@@ -702,6 +735,10 @@ onMounted(() => {
 
 .location-status:hover {
   background-color: #F1F5F9;
+}
+
+.location-status.location-error {
+  color: #F59E0B;
 }
 
 .location-status.has-location {

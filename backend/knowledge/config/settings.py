@@ -26,7 +26,7 @@ class Settings(BaseCommonSettings):
     CHUNK_OVERLAP: int = 200
 
     # Retrieval configuration
-    TOP_ROUGH: int = 50
+    TOP_ROUGH: int = 20
     TOP_FINAL: int = 5
 
     model_config = SettingsConfigDict(

@@ -2,25 +2,26 @@
 body {
   margin: 0;
   padding: 0;
-  background-color: #0d1117;
-  color: #c9d1d9;
+  background-color: var(--main-bg);
+  color: var(--text-main);
+  font-family: 'Inter', 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif;
 }
 
 /* Scrollbar styling for Webkit */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0d1117; 
+  background: transparent;
 }
  
 ::-webkit-scrollbar-thumb {
-  background: #30363d; 
-  border-radius: 4px;
+  background: var(--border-color);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #58a6ff; 
+  background: var(--text-sub);
 }

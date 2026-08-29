@@ -21,9 +21,9 @@ class QueryService:
 
 
 
-    def generate_answer(self, user_question:str, retrival_context: List[Document]) -> str:
+    async def generate_answer(self, user_question: str, retrival_context: List[Document]) -> str:
         """
-        对接大语言模型的入口
+        对接大语言模型的入口 (异步)
         Args:
             user_question: 用户问题
             retrival_context: 检索到的上下文
@@ -33,16 +33,15 @@ class QueryService:
         """
 
         # 1. 判断是否检索到了文档
-        if not  retrival_context:
+        if not retrival_context:
             # 即使没检索到，也应保持身份认知
             prompt = f"""
             你是由 ITS 多智能体系统驱动的“ITS 智能技术支持助手”。
             对于用户的问题：“{user_question}”，当前的知识库中暂时没有找到相关的解决方案。
             请礼貌地告知用户，并根据你的通用知识尝试给出建议，但需说明这些建议并非来自官方知识库。
             """
-            llm_response=self.llm.invoke(prompt)
+            llm_response = await self.llm.ainvoke(prompt)
             return llm_response.content
-
 
         # 2. 处理检索到的知识内容
         formatted_context = []
@@ -94,16 +93,16 @@ class QueryService:
 
         # 4. 调用模型
         try:
-            llm_response=self.llm.invoke(prompt)
+            llm_response = await self.llm.ainvoke(prompt)
             # 5. 返回模型的结果
-            return  llm_response.content
+            return llm_response.content
         except Exception as e:
             logger.error(f"LLM 生成回答失败: {e}")
             return "抱歉，我在生成回答时遇到了问题。但我可以告诉你，根据检索到的资料，这可能与电源或静电有关。请检查电源线连接或尝试释放静电。"
 
-    def rerank_documents(self, user_question: str, documents: List[Document]) -> List[Document]:
+    async def rerank_documents(self, user_question: str, documents: List[Document]) -> List[Document]:
         """
-        使用 LLM 对检索到的文档进行重排序 (Rerank)
+        使用 LLM 对检索到的文档进行重排序 (Rerank) (异步)
         """
         if not documents:
             return []
@@ -123,7 +122,7 @@ class QueryService:
         """
         
         try:
-            response = self.llm.invoke(prompt)
+            response = await self.llm.ainvoke(prompt)
             # 使用更宽容的正则提取 ID
             ids_str = re.findall(r'ID\s*[:：]?\s*(\d+)|\b(\d+)\b', response.content)
             # 展平匹配结果并转换为整数

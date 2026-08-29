@@ -82,9 +82,9 @@ class VectorStoreRepository:
 
 
 
-    def    embedd_document(self,text:str)->List[float]:
+    async def embedd_document(self, text: str) -> List[float]:
         """
-          对query进行向量化
+          对query进行向量化 (异步)
         Args:
             text: 输入文本
 
@@ -92,11 +92,12 @@ class VectorStoreRepository:
             List[float]: 嵌入后的浮点数列表
 
         """
+        # DashScopeEmbeddings 目前主要支持同步，但在 async 环境中调用是安全的
         return self.embedding.embed_query(text)
 
-    def embedd_documents(self, texts:List[str])->List[List[float]]:
+    async def embedd_documents(self, texts: List[str]) -> List[List[float]]:
         """
-        对字符串列表进行向量化
+        对字符串列表进行向量化 (异步)
         Args:
          texts: 输入文本字符串列表
 
@@ -106,19 +107,19 @@ class VectorStoreRepository:
         """
         return self.embedding.embed_documents(texts)
 
-
-    def  search_similarity_with_score(self,user_question:str,top_k:int=5)->List[tuple[Document, float]]:
+    async def search_similarity_with_score(self, user_question: str, top_k: int = 5) -> List[tuple[Document, float]]:
         """
-         相似性检索带文档分数
+         相似性检索带文档分数 (异步)
          分数（chroma向量数据库）：返回是L2距离得分（分数值越小越相似），不是余弦相似度的得分（分数余额高越相似） 距离得分：1-余弦相似度得分
         Args:
             user_question:
+            top_k: 返回结果数量
 
         Returns:
-            List[Document]: 返回基于向量检索的相似性文档列表
-
+            List[tuple[Document, float]]: 返回基于向量检索的相似性文档列表及其得分
         """
-        return self.vector_database.similarity_search_with_score(user_question,top_k)
+        # 使用 aio 版本的相似度搜索
+        return await self.vector_database.asimilarity_search_with_score(user_question, k=top_k)
 
 
 

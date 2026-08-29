@@ -74,43 +74,36 @@ async def startup_event():
     # 预连接 MCP 服务并注入子智能体，使用异步任务防止阻塞启动
     async def init_mcp():
         logger.info("Starting background MCP connection task...")
-        # 针对 Python 3.11+ 的 ExceptionGroup 进行处理
-        import sys
         
         for i in range(3):
             try:
-                # 增加 8 秒硬超时，防止连接挂起，比并行任务稍长一点
+                # 增加 8 秒硬超时，防止连接挂起
                 async def connect_safe(client, name):
                     try:
                         await asyncio.wait_for(client.connect(), timeout=5.0)
                         logger.info(f"Successfully connected to MCP {name} service.")
                         return True
-                    except (asyncio.TimeoutError, TimeoutError):
-                        logger.warning(f"MCP {name} connection timed out.")
-                        return False
                     except Exception as e:
-                        # 捕获包括 ExceptionGroup 在内的所有异常
-                        logger.warning(f"MCP {name} connection failed with error: {type(e).__name__}: {e}")
+                        # 尝试解包 ExceptionGroup 以获取底层错误
+                        error_detail = str(e)
+                        if hasattr(e, 'exceptions'):
+                            error_detail = "; ".join([str(ex) for ex in e.exceptions])
+                        logger.warning(f"MCP {name} connection failed: {error_detail}")
                         return False
 
-                # 并行执行连接任务，使用 return_exceptions=True 确保 gather 不会因其中一个失败而崩溃
+                # 仅并行执行搜索连接任务
                 results = await asyncio.gather(
                     connect_safe(search_mac_client, "Search"),
-                    connect_safe(amap_map_mcp, "Map"),
                     return_exceptions=True
                 )
                 
                 search_ok = results[0] if isinstance(results[0], bool) else False
-                map_ok = results[1] if isinstance(results[1], bool) else False
                 
                 if search_ok:
                     technical_agent.mcp_servers = [search_mac_client]
                 
-                if map_ok:
-                    comprehensive_service_agent.mcp_servers = [amap_map_mcp]
-                
-                if search_ok and map_ok:
-                    logger.info("All MCP services are ready.")
+                if search_ok:
+                    logger.info("MCP services are ready.")
                     break
             except Exception as e:
                 logger.error(f"MCP connection iteration {i+1} encountered unexpected error: {e}")
@@ -389,7 +382,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             if chat_request.location:
                 session.context["user_location"] = chat_request.location
             
-            # 使用 run_streamed 启动流式运行，传入 session 和 context，增加 60s 强制超时
+            # 使用 run_streamed 启动流式运行，传入 session 和 context
             stream = Runner.run_streamed(
                 orchestrator_agent, 
                 input=chat_request.question, 
