@@ -1,9 +1,7 @@
 import httpx
 from agents import function_tool
 from config.settings import settings
-import logging
-
-logger = logging.getLogger(__name__)
+from common.infrastructure.logging.logger import logger
 
 @function_tool
 async def query_knowledge(question: str) -> str:
@@ -21,11 +19,15 @@ async def query_knowledge(question: str) -> str:
     payload = {"question": question}
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            logger.info(f"Querying knowledge base at {url} with question: {question}")
             response = await client.post(url, json=payload)
+            logger.info(f"Knowledge base response status: {response.status_code}")
             response.raise_for_status()
             result = response.json()
-            return result.get("answer", "未能从知识库中找到相关信息。")
+            answer = result.get("answer", "未能从知识库中找到相关信息。")
+            logger.info(f"Knowledge base returned answer of length {len(answer)}")
+            return answer
     except Exception as e:
-        logger.error(f"调用知识库 API 失败: {str(e)}")
+        logger.error(f"调用知识库 API 失败: {str(e)}", exc_info=True)
         return f"查询知识库时发生错误: {str(e)}"

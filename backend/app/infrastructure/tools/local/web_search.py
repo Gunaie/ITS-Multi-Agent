@@ -1,9 +1,7 @@
 import httpx
 from agents import function_tool
 from config.settings import settings
-import logging
-
-logger = logging.getLogger(__name__)
+from common.infrastructure.logging.logger import logger
 
 @function_tool
 async def bailian_web_search(query: str) -> str:

@@ -1,5 +1,10 @@
-from infrastructure.database.database_pool import DatabasePool
-from infrastructure.logging.logger import logger
+import sys
+import os
+# 向上三级到达 backend 目录
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from app.infrastructure.database.database_pool import DatabasePool
+from ..logging.logger import logger
 from typing import Optional, Dict, Any
 import pymysql.cursors
 

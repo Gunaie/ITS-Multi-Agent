@@ -3,7 +3,7 @@ import math
 from infrastructure.database.database_pool import pool
 from agents import function_tool, RunContextWrapper
 from agents.memory import Session
-from infrastructure.logging.logger import logger
+from common.infrastructure.logging.logger import logger
 
 def haversine(lat1, lon1, lat2, lon2):
     """计算两个经纬度之间的距离（公里）"""

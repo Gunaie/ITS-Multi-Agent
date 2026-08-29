@@ -21,7 +21,7 @@ cp .env.example .env
 AL_BAILIAN_API_KEY=你的阿里云百炼API_KEY
 AL_BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MAIN_MODEL_NAME=qwen3.8-27b
-SUB_MODEL_NAME=qwen3.8-flash
+SUB_MODEL_NAME=qwen3.7-flash-2026-07-15
 ```
 
 ### 3. 一键启动

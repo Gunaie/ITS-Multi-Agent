@@ -14,6 +14,7 @@ from infrastructure.tools.local.service_station import (
     query_nearest_repair_shops_by_coords,
     map_uri
 )
+from infrastructure.tools.local.amap_tool import bailian_amap_search
 
 from infrastructure.tools.mcp.mcp_servers import (
     amap_map_mcp,
@@ -30,11 +31,12 @@ comprehensive_service_agent = Agent(
         temperature=0,
         max_tokens=2048,
     ),
-    # 本地工具：包含服务站查询和导航链接生成
+    # 本地工具：包含服务站查询、高德地图搜索和导航链接生成
     tools=[
         resolve_user_location_from_text,
         query_nearest_repair_shops_by_coords,
-        map_uri
+        map_uri,
+        bailian_amap_search
     ],
     # mcp_servers 将在运行时由调度者根据连接情况动态注入
 )

@@ -5,7 +5,11 @@ from config.settings import settings
 search_mac_client = MCPServerSse(
     params={
         "url": "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/sse",
-        "headers": {"Authorization": f"Bearer {settings.AL_BAILIAN_API_KEY}"}
+        "headers": {
+            "Authorization": f"Bearer {settings.AL_BAILIAN_API_KEY}",
+            "X-DashScope-SSE": "enable",
+            "Accept": "text/event-stream"
+        }
     },
     name="search_mac_client"
 )
@@ -14,7 +18,11 @@ search_mac_client = MCPServerSse(
 amap_map_mcp = MCPServerSse(
     params={
         "url": "https://dashscope.aliyuncs.com/api/v1/mcps/amap-maps/sse",
-        "headers": {"Authorization": f"Bearer {settings.AL_BAILIAN_API_KEY}"}
+        "headers": {
+            "Authorization": f"Bearer {settings.AL_BAILIAN_API_KEY}",
+            "X-DashScope-SSE": "enable",
+            "Accept": "text/event-stream"
+        }
     },
     name="amap_map_mcp"
 )

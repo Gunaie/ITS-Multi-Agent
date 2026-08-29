@@ -1,9 +1,8 @@
-from pydantic_settings import BaseSettings,SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from common.config.base_settings import BaseCommonSettings
 import os
 
-class Settings(BaseSettings):
-    API_KEY: str = os.environ.get("API_KEY")
-    BASE_URL: str = os.environ.get("BASE_URL")
+class Settings(BaseCommonSettings):
     MODEL: str = os.environ.get("MODEL")
     EMBEDDING_MODEL: str = os.environ.get("EMBEDDING_MODEL")
 

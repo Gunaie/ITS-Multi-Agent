@@ -15,22 +15,12 @@ from pydantic import model_validator
 from typing_extensions import Self
 
 
-class Settings(BaseSettings):
+from common.config.base_settings import BaseCommonSettings
+
+class Settings(BaseCommonSettings):
     """
     应用配置类
-
-    配置项会自动从以下来源读取（优先级从高到低）：
-    1. 环境变量
-    2. .env 文件
-    3. 默认值
     """
-
-    # ==================== AI 服务配置 ====================
-
-    # 阿里百炼 API
-    AL_BAILIAN_API_KEY: Optional[str] = Field(default=None, description="阿里百炼 API Key")
-    AL_BAILIAN_BASE_URL: Optional[str] = Field(default=None, description="阿里百炼 Base URL")
-
     # ==================== 模型配置 ====================
 
     MAIN_MODEL_NAME: Optional[str] = Field(
@@ -38,7 +28,7 @@ class Settings(BaseSettings):
         description="主模型名称"
     )
     SUB_MODEL_NAME: Optional[str] = Field(
-        default="qwen3.8-flash",
+        default="qwen3.7-flash-2026-07-15",
         description="子模型名称"
     )
 
@@ -52,9 +42,6 @@ class Settings(BaseSettings):
     MYSQL_CHARSET: str = Field(default="utf8mb4", description="MySQL字符集")
     MYSQL_CONNECT_TIMEOUT: int = Field(default=10, description="MySQL连接超时（秒）")
     MYSQL_MAX_CONNECTIONS: int = Field(default=5, description="MySQL最大连接数")
-
-    REDIS_HOST: str = Field(default="localhost", description="Redis主机地址")
-    REDIS_PORT: int = Field(default=6379, description="Redis端口")
 
     # ==================== 外部服务配置 ====================
 

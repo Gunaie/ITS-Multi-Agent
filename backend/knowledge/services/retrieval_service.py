@@ -4,7 +4,7 @@ import re
 from typing import List, Dict, Any, Optional
 
 # 使用统一的 logger，移除重复的 basicConfig
-logger = logging.getLogger(__name__)
+from common.infrastructure.logging.logger import logger
 
 from langchain_core.documents import Document
 from repositories.vector_store_repository import VectorStoreRepository
@@ -137,54 +137,49 @@ class RetrievalService:
 
     def retrieval(self, user_question: str) -> List[Document]:
         """
-         核心检索方法（检索器的入口）
-        Args:
-            user_question: 用户输入的问题
-
-        Returns:
-           List[Document]: 返回指定Top-N个相似性文档列表
+        核心检索方法：多路检索 + 重排序
         """
-
-        # 1. 第一路检索(基于嵌入模型的向量检索)
-        based_vector_candidates = []
-        try:
-            based_vector_candidates = self._search_based_vector(user_question)
-        except Exception as e:
-            logger.error(f"第一路向量检索失败 (可能由于嵌入模型服务异常): {e}")
-
-        # 2. 第二路检索(基于jieba的分词匹配的检索)
-        based_title_candidates = []
-        try:
-            based_title_candidates = self._search_based_title(user_question)
-        except Exception as e:
-            logger.error(f"第二路标题检索失败: {e}")
-
-        # 3. 合并两路检索的文档列表
-        total_candidates = based_vector_candidates + based_title_candidates
-        
-        if not total_candidates:
-            logger.warning(f"所有检索路径均未找到相关内容: {user_question}")
+        if not user_question:
             return []
 
-        # 4. 对合并后的文档列表去重
-        unique_candidates = self._deduplicate(total_candidates)
-
-        # 5. 重新打分排序
+        # 1. 执行多路并行检索 (此处为逻辑并行，实际为顺序执行)
+        vector_docs = []
         try:
-            rough_top_documents = self._reranking(unique_candidates, user_question)
+            vector_docs = self._search_based_vector(user_question)[:5]
         except Exception as e:
-            logger.error(f"重新打分排序失败: {e}。使用原始去重后列表。")
-            rough_top_documents = unique_candidates
+            logger.error(f"向量检索失败: {e}")
 
-        # 6. 使用 LLM 进行二次精排 (Rerank)
+        title_docs = []
         try:
-            final_top_documents = self.query_service.rerank_documents(user_question, rough_top_documents)
+            title_docs = self._search_based_title(user_question)
         except Exception as e:
-            logger.error(f"LLM Rerank 失败: {e}. 使用原始排序。")
-            final_top_documents = rough_top_documents
+            logger.error(f"标题检索失败: {e}")
 
-        # 7.返回指定Top-N个文档列表
-        return final_top_documents[:4]
+        # 2. 合并、去重与截断
+        all_docs = vector_docs + title_docs
+        if not all_docs:
+            logger.warning(f"所有检索路径均未找到内容: {user_question}")
+            return []
+
+        unique_docs = self._deduplicate(all_docs)
+
+        # 3. 粗排 (语义打分)
+        try:
+            rough_top_docs = self._reranking(unique_docs[:15], user_question)
+        except Exception as e:
+            logger.error(f"语义粗排失败: {e}")
+            rough_top_docs = unique_docs[:10]
+
+        # 4. 精排 (LLM 重排序)
+        try:
+            if len(rough_top_docs) > 1:
+                final_docs = self.query_service.rerank_documents(user_question, rough_top_docs[:6])
+            else:
+                final_docs = rough_top_docs
+            return final_docs[:4]
+        except Exception as e:
+            logger.error(f"LLM精排失败: {e}")
+            return rough_top_docs[:4]
 
     def _search_based_vector(self, user_question: str) -> List[Document]:
         """
@@ -329,7 +324,7 @@ class RetrievalService:
         for candidate_index, unique_candidate in enumerate(unique_candidates):
             # 如何去判断 第二路长文档 or  第一路的文档和第二路?
             # 2.1 第二路的长文档
-            if "chunk_index" in unique_candidate.metadata and "similarity" in unique_candidate.metadata:
+            if "similarity" in unique_candidate.metadata:
                 score_doc.append((unique_candidate, unique_candidate.metadata['similarity']))
             # 2.2 第一路和第二路的短文档
             else:
@@ -342,8 +337,9 @@ class RetrievalService:
             query_embedding = self.chroma_vector.embedd_document(user_question)
 
             # 3.2 获取到需要向量的文档内容
-            embedding_docs_content = ["文档来源:" + doc.metadata['title'] + doc.page_content for doc in
-                                      need_embedding_docs]
+            # 注意：doc.page_content 已经包含了 "文档来源:title\n" 前缀，无需重复添加
+            embedding_docs_content = [doc.page_content for doc in need_embedding_docs]
+            
             # 3.3 计算需要向量的文档内容
             doc_embeddings = self.chroma_vector.embedd_documents(embedding_docs_content)
 
@@ -351,8 +347,8 @@ class RetrievalService:
             similarity = cosine_similarity([query_embedding], doc_embeddings).flatten()
 
             # 3.5 封装到带得分的文档列表
-            for idx, candidate_index in enumerate(need_embedding_candidates_indices):
-                score_doc.append((unique_candidates[candidate_index], similarity[idx]))
+            for idx, doc in enumerate(need_embedding_docs):
+                score_doc.append((doc, similarity[idx]))
 
         # 4. 排序
         sorted_docs = sorted(score_doc, key=lambda x: x[1], reverse=True)
@@ -403,7 +399,7 @@ class RetrievalService:
                 metadata={
                     "path": fine_md_metadata['path'],
                     "title": fine_md_metadata['title'],
-                    "chunk_index:": int(chunk_idx),
+                    "chunk_index": int(chunk_idx),
                     "similarity": float(doc_chunks_similarity[chunk_idx])
                 }
             )

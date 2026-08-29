@@ -8,8 +8,7 @@ from services.retrieval_service import RetrievalService
 from services.query_service import QueryService
 from config.settings import settings
 
-# 设置日志
-logger = logging.getLogger(__name__)
+from common.infrastructure.logging.logger import logger
 
 # 创建路由和实例
 router = APIRouter()

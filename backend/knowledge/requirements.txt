@@ -10,3 +10,8 @@ unstructured[all-docs]
 python-magic
 python-dotenv
 pydantic-settings
+jieba
+scikit-learn
+beautifulsoup4
+markdownify
+python-multipart

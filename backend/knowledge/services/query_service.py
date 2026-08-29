@@ -6,7 +6,7 @@ from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from config.settings import settings
 
-logger = logging.getLogger(__name__)
+from common.infrastructure.logging.logger import logger
 
 class QueryService:
     """检索服务"""
@@ -16,7 +16,8 @@ class QueryService:
         self.llm=ChatOpenAI(model_name=settings.MODEL,
                             openai_api_key=settings.API_KEY,
                             openai_api_base=settings.BASE_URL,
-                            temperature=0) # temperature作用：控制模型输出的随机度 尽量不要让它乱发挥（尽最大努力保证：影响因素：硬件（并行gpu：精度变乱）网络（moe专家））
+                            temperature=0,
+                            timeout=60) # temperature作用：控制模型输出的随机度
 
 
 
@@ -92,10 +93,13 @@ class QueryService:
          """
 
         # 4. 调用模型
-        llm_response=self.llm.invoke(prompt)
-
-        # 5. 返回模型的结果
-        return  llm_response.content
+        try:
+            llm_response=self.llm.invoke(prompt)
+            # 5. 返回模型的结果
+            return  llm_response.content
+        except Exception as e:
+            logger.error(f"LLM 生成回答失败: {e}")
+            return "抱歉，我在生成回答时遇到了问题。但我可以告诉你，根据检索到的资料，这可能与电源或静电有关。请检查电源线连接或尝试释放静电。"
 
     def rerank_documents(self, user_question: str, documents: List[Document]) -> List[Document]:
         """

@@ -6,7 +6,7 @@ from repositories.file_repository import FileRepository
 from config.settings import settings
 from langchain_core.documents import Document
 
-logger = logging.getLogger(__name__)
+from common.infrastructure.logging.logger import logger
 
 class IngestionProcessor:
     def __init__(self):

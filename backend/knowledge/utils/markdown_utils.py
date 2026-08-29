@@ -61,7 +61,7 @@ class MarkDownUtils:
     def clean_markdown_images(text: str) -> str:
         """将 ![描述](url) 替换为纯 url，每张图单独一行"""
         # 匹配 Markdown 图片语法: ![任意文字](任意URL)
-        pattern = r'!\$$[^$$]*\]\((https?://[^\s\)]+)\)'
+        pattern = r'!\[[^\]]*\]\((https?://[^\s\)]+)\)'
 
         def replace_func(match):
             url = match.group(1)
