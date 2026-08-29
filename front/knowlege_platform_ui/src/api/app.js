@@ -91,7 +91,7 @@ export function updateSessionTitle(sessionId, title) {
   return service({
     url: `/sessions/${sessionId}`,
     method: 'patch',
-    data: { title }
+    data: { title, app_type: 'knowledge' }
   })
 }
 

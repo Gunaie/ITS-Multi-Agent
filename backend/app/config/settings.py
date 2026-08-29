@@ -7,6 +7,7 @@
 3. 默认值设置
 4. 配置文档化
 """
+import os
 from pathlib import Path
 from typing import Optional
 from pydantic import Field
@@ -75,15 +76,17 @@ class Settings(BaseSettings):
     # ==================== Pydantic Settings 配置 ====================
 
     model_config = SettingsConfigDict(
-        # 优先从当前目录的父目录（app目录）寻找 .env，如果找不到，再尝试从项目的根目录寻找
+        # 依次寻找 .env 文件：当前目录 -> app目录 -> backend目录 -> 项目根目录
         env_file=[
-            str(Path(__file__).parent.parent / ".env"),
-            str(Path(__file__).parent.parent.parent / ".env")
+            os.path.join(os.path.dirname(__file__), ".env"),
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), ".env"),
         ],
         env_file_encoding="utf-8",          # .env文件编码
         case_sensitive=True,                 # 环境变量名大小写敏感
         extra="ignore",                      # 忽略额外的环境变量
-        validate_default=True,               # 验证默认值
+        validate_default=True                # 验证默认值
     )
 
     # ====================  ====================

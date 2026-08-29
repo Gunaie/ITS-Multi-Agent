@@ -276,11 +276,13 @@ async def delete_session(session_id: str, app_type: str = "agent", current_user:
 
 class SessionTitleUpdate(BaseModel):
     title: str
+    app_type: Optional[str] = "agent"
 
 @app.patch("/sessions/{session_id}")
 async def update_session_title(session_id: str, request: SessionTitleUpdate, current_user: dict = Depends(get_current_user)):
     try:
-        logger.info(f"Updating session {session_id} title to: {request.title}")
+        app_type = request.app_type or "agent"
+        logger.info(f"Updating session {session_id} (type: {app_type}) title to: {request.title}")
         meta_key = f"session_meta:{session_id}"
         
         if not redis_client.exists(meta_key):
@@ -289,11 +291,14 @@ async def update_session_title(session_id: str, request: SessionTitleUpdate, cur
             redis_client.hset(meta_key, mapping={
                 "title": request.title,
                 "created_at": time.time(),
-                "app_type": "agent" # 默认 agent
+                "app_type": app_type
             })
         else:
             # 存在则只更新标题
             redis_client.hset(meta_key, "title", request.title)
+            # 同时确保它在正确的用户列表中（以防万一）
+            user_id = current_user['username']
+            redis_client.zadd(f"user_sessions:{app_type}:{user_id}", {session_id: time.time()})
             
         return {"status": "success", "title": request.title}
     except Exception as e:
@@ -301,39 +306,33 @@ async def update_session_title(session_id: str, request: SessionTitleUpdate, cur
         raise HTTPException(status_code=500, detail=f"更新标题失败: {str(e)}")
 
 @app.post("/chat", response_model=ChatResponse)
-@limiter.limit("5/minute")
 async def chat(request: Request, chat_request: ChatRequest, current_user: dict = Depends(get_current_user)):
     try:
         user_id = current_user['username']
-        logger.info(f"User {user_id} asked: {chat_request.question}")
+        logger.info(f"User {user_id} asked: {chat_request.question} (session: {chat_request.session_id})")
         session = get_session(chat_request.session_id)
         
         if chat_request.location:
             session.context["user_location"] = chat_request.location
             
         # 运行编排智能体，传入 session 和 context
+        logger.info("Starting Agent Runner...")
         result = await Runner.run(
             orchestrator_agent, 
             input=chat_request.question, 
             session=session,
             context=session,
-            run_config=RunConfig(tracing_disabled=False)
+            run_config=RunConfig(tracing_disabled=True, max_turns=15)
         )
+        logger.info("Agent Runner finished successfully")
+        
         # 保存会话状态到 Redis，传入 user_id 以便列出 (增加 app_type 支持)
         save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
 
-        logger.info(f"Agent response generated successfully")
         return ChatResponse(answer=result.final_output)
     except Exception as e:
-        logger.error(f"Error in chat: {str(e)}")
-        # 即使 logger 失败（虽然不太可能，因为它用 utf-8），也不要让 print 崩溃
-        try:
-            print(f"Error in chat (safe print): {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
-        except:
-            pass
-        raise HTTPException(status_code=500, detail="智能体执行过程中发生错误，请稍后再试。")
-
-from infrastructure.tools.local.knowledge_base import query_knowledge
+        logger.error(f"Error in chat: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"智能体执行失败: {str(e)}")
 
 @app.post("/chat_knowledge", response_model=ChatResponse)
 async def chat_knowledge(request: Request, chat_request: ChatRequest, current_user: dict = Depends(get_current_user)):
@@ -348,9 +347,15 @@ async def chat_knowledge(request: Request, chat_request: ChatRequest, current_us
         await session.add_items([{"role": "user", "content": chat_request.question}])
         
         # 直接调用知识库工具的原始函数 (严格 RAG)
-        # 注意：query_knowledge 被 @function_tool 装饰，是一个 FunctionTool 对象
-        # 使用 .__wrapped__ 获取被装饰的原始异步函数
-        answer = await query_knowledge.__wrapped__(chat_request.question)
+        from infrastructure.tools.local.knowledge_base import query_knowledge
+        try:
+            if hasattr(query_knowledge, "__wrapped__"):
+                answer = await query_knowledge.__wrapped__(chat_request.question)
+            else:
+                answer = await query_knowledge(chat_request.question)
+        except Exception as tool_err:
+            logger.error(f"Knowledge tool call failed: {tool_err}")
+            answer = f"抱歉，检索知识库时发生错误: {str(tool_err)}"
         
         # 手动添加助手消息到 Session
         await session.add_items([{"role": "assistant", "content": answer}])
@@ -368,7 +373,6 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.post("/chat_stream")
-@limiter.limit("5/minute")
 async def chat_stream(request: Request, chat_request: ChatRequest, current_user: dict = Depends(get_current_user)):
     """
     流式对话接口 (SSE)
@@ -376,7 +380,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
     async def event_generator():
         try:
             user_id = current_user['username']
-            logger.info(f"User {user_id} asked (stream): {chat_request.question}")
+            logger.info(f"User {user_id} asked (stream): {chat_request.question} (session: {chat_request.session_id})")
             session = get_session(chat_request.session_id)
             
             if chat_request.location:
@@ -388,7 +392,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 input=chat_request.question, 
                 session=session,
                 context=session,
-                run_config=RunConfig(tracing_disabled=False)
+                run_config=RunConfig(tracing_disabled=True, max_turns=15)
             )
             
             full_reasoning = ""
