@@ -176,7 +176,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background-color: #0d1117;
+  background-color: var(--main-bg);
 }
 
 .messages {
@@ -190,7 +190,7 @@ onMounted(() => {
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    color: #8b949e;
+    color: var(--text-sub);
     
     p {
       margin-top: 20px;
@@ -209,7 +209,7 @@ onMounted(() => {
       align-items: flex-end;
       
       .bubble {
-        background-color: #409EFF;
+        background-color: var(--primary-blue);
         color: #fff;
         border-top-right-radius: 0;
       }
@@ -226,9 +226,9 @@ onMounted(() => {
       align-items: flex-start;
       
       .bubble {
-        background-color: #1f242d;
-        color: #c9d1d9;
-        border: 1px solid #30363d;
+        background-color: var(--sidebar-bg);
+        color: var(--text-main);
+        border: 1px solid var(--border-color);
         border-top-left-radius: 0;
       }
     }
@@ -250,6 +250,7 @@ onMounted(() => {
     line-height: 1.6;
     font-size: 14px;
     word-break: break-word;
+    box-shadow: var(--shadow-sm);
 
     /* Markdown 样式适配 */
     :deep(p) {
@@ -260,7 +261,7 @@ onMounted(() => {
     }
 
     :deep(a) {
-      color: #58a6ff;
+      color: var(--primary-blue);
       text-decoration: none;
       &:hover {
         text-decoration: underline;
@@ -273,14 +274,15 @@ onMounted(() => {
     }
     
     :deep(code) {
-      background-color: rgba(110, 118, 129, 0.4);
+      background-color: var(--divider-color);
       padding: 0.2em 0.4em;
       border-radius: 6px;
       font-family: monospace;
+      color: var(--text-main);
     }
     
     :deep(pre) {
-      background-color: #161b22;
+      background-color: var(--divider-color);
       padding: 10px;
       border-radius: 6px;
       overflow-x: auto;
@@ -302,12 +304,12 @@ onMounted(() => {
 .message-sources {
   margin-top: 15px;
   padding-top: 12px;
-  border-top: 1px dashed #30363d;
+  border-top: 1px dashed var(--border-color);
 }
 
 .source-title {
   font-size: 12px;
-  color: #8b949e;
+  color: var(--text-sub);
   margin-bottom: 8px;
   font-weight: 600;
 }
@@ -320,33 +322,34 @@ onMounted(() => {
 
 .source-tag {
   border-radius: 4px;
-  background-color: #0d1117;
-  border-color: #30363d;
-  color: #8b949e;
+  background-color: var(--sidebar-bg);
+  border-color: var(--border-color);
+  color: var(--text-sub);
 }
 
 .input-area {
   padding: 20px;
-  background-color: #0d1117;
-  border-top: 1px solid #30363d;
+  background-color: var(--main-bg);
+  border-top: 1px solid var(--border-color);
   display: flex;
   gap: 10px;
   align-items: flex-end;
   
   :deep(.el-textarea__inner) {
-    background-color: #161b22;
-    border-color: #30363d;
-    color: #c9d1d9;
+    background-color: var(--sidebar-bg);
+    border-color: var(--border-color);
+    color: var(--text-main);
     box-shadow: none;
     
     &:focus {
-      border-color: #409EFF;
+      border-color: var(--primary-blue);
     }
   }
   
   .send-btn {
     height: auto;
     padding: 10px 20px;
+    border-radius: 8px;
   }
 }
 
@@ -355,7 +358,7 @@ onMounted(() => {
     display: inline-block;
     width: 6px;
     height: 6px;
-    background-color: #8b949e;
+    background-color: var(--text-sub);
     border-radius: 50%;
     margin: 0 2px;
     animation: bounce 1.4s infinite ease-in-out both;

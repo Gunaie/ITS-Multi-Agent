@@ -72,12 +72,36 @@ const handleAuth = async () => {
 </script>
 
 <style>
+:root {
+  /* 明亮科技风配色 - 同步自咨询平台 */
+  --sidebar-bg: #F8FAFC;
+  --main-bg: #FFFFFF;
+  --card-bg: #FFFFFF;
+  --primary-green: #10B981;
+  --primary-blue: #3B82F6;
+  --text-main: #1E293B;
+  --text-sub: #64748B;
+  --border-color: #E2E8F0;
+  --divider-color: #F1F5F9;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  
+  /* Element Plus 变量覆盖 */
+  --el-menu-bg-color: var(--sidebar-bg);
+  --el-menu-hover-bg-color: var(--divider-color);
+  --el-menu-text-color: var(--text-sub);
+  --el-menu-active-color: var(--primary-blue);
+  --el-bg-color: var(--main-bg);
+}
+
 html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
-  background-color: #0d1117;
+  font-family: 'Inter', 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  background-color: var(--main-bg);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
 }
 
 .login-container {
@@ -85,33 +109,29 @@ html, body {
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: #0d1117;
-  background-image: radial-gradient(#2d333b 1px, transparent 1px);
+  background-color: var(--sidebar-bg);
+  background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
   background-size: 30px 30px;
 }
 
 .login-card {
   width: 400px;
-  background-color: #161b22;
-  border-color: #30363d;
-  color: #c9d1d9;
+  background-color: var(--card-bg);
+  border-color: var(--border-color);
+  color: var(--text-main);
+  box-shadow: var(--shadow-md);
+  border-radius: 12px;
 }
 
 .login-card :deep(.el-card__header) {
-  border-bottom-color: #30363d;
+  border-bottom-color: var(--divider-color);
   text-align: center;
   font-size: 20px;
   font-weight: bold;
 }
 
 .login-card :deep(.el-form-item__label) {
-  color: #8b949e;
-}
-
-.login-card :deep(.el-input__inner) {
-  background-color: #0d1117;
-  border-color: #30363d;
-  color: #c9d1d9;
+  color: var(--text-sub);
 }
 
 .auth-actions {
@@ -123,9 +143,11 @@ html, body {
 
 .auth-btn {
   width: 100%;
+  border-radius: 8px;
+  height: 40px;
 }
 
 .auth-switch {
-  color: #58a6ff;
+  color: var(--primary-blue);
 }
 </style>

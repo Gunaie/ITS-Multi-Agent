@@ -16,85 +16,16 @@ from common.infrastructure.limiter import limiter
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from contextlib import asynccontextmanager
-
-# 将当前目录和项目根目录添加到 Python 路径
+# 将当前目录添加到 Python 路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 强制设置 sys.stdout 编码为 utf-8 以防止 Windows 下 the UnicodeEncodeError
+# 强制设置 sys.stdout 编码为 utf-8 以防止 Windows 下的 UnicodeEncodeError
 if sys.platform == "win32":
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from infrastructure.tools.mcp.mcp_servers import search_mac_client, amap_map_mcp
-from multi_agent.technical_agent import technical_agent
-from multi_agent.service_agent import comprehensive_service_agent
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup logic
-    try:
-        UserRepo.init_table()
-        logger.info("Database tables initialized.")
-    except Exception as e:
-        logger.error(f"Failed to initialize database tables: {e}")
-    
-    # 预连接 MCP 服务并注入子智能体
-    async def connect_with_retry(client, agent, name, max_retries=2):
-        for i in range(max_retries):
-            try:
-                # 针对百炼平台 hosted MCP，连接可能因 SSE 握手协议不兼容而失败
-                # 我们增加超时时间并捕获特定错误
-                await asyncio.wait_for(client.connect(), timeout=10.0)
-                if client not in agent.mcp_servers:
-                    agent.mcp_servers.append(client)
-                logger.info(f"Successfully connected to hosted MCP {name} service.")
-                return True
-            except asyncio.TimeoutError:
-                logger.warning(f"Connection to MCP {name} timed out (attempt {i+1}/{max_retries})")
-            except Exception as e:
-                # 如果是常见的 SSE 握手错误，记录详细信息但不要让启动卡住
-                wait_time = (i + 1) * 2
-                logger.warning(f"MCP {name} connection issue: {str(e)}. "
-                               f"Note: Bailian hosted MCPs may require specific network environments. "
-                               f"Falling back to native API tools. (Attempt {i+1}/{max_retries})")
-                if i < max_retries - 1:
-                    await asyncio.sleep(wait_time)
-        
-        logger.warning(f"MCP {name} is unavailable. Using local fallback tools (DashScope Direct API).")
-        return False
-
-    async def mcp_heartbeat():
-        """定期检查 MCP 连接并保活，如果掉线则尝试重连"""
-        while True:
-            await asyncio.sleep(300)  # 延长检查间隔至5分钟，减少对不稳连接的冲击
-            try:
-                # 仅在掉线时尝试重连
-                if not getattr(search_mac_client, 'is_connected', False):
-                     await connect_with_retry(search_mac_client, technical_agent, "Search", max_retries=1)
-                if not getattr(amap_map_mcp, 'is_connected', False):
-                     await connect_with_retry(amap_map_mcp, comprehensive_service_agent, "Map", max_retries=1)
-            except Exception as e:
-                logger.debug(f"MCP Heartbeat silent failure: {e}")
-
-    async def init_services():
-        # 并行启动连接任务
-        await asyncio.gather(
-            connect_with_retry(search_mac_client, technical_agent, "Search"),
-            connect_with_retry(amap_map_mcp, comprehensive_service_agent, "Map")
-        )
-        # 启动心跳保活任务
-        asyncio.create_task(mcp_heartbeat())
-            
-    asyncio.create_task(init_services())
-    
-    yield
-    # Shutdown logic
-    logger.info("Shutting down application...")
-
-app = FastAPI(title="ITS Multi-Agent Application Backend", lifespan=lifespan)
+app = FastAPI(title="ITS Multi-Agent Application Backend")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -105,27 +36,50 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.error(f"Validation error for {request.url.path}: {exc.errors()}")
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": "请求参数验证失败", "errors": exc.errors()},
-    )
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    logger.warning(f"HTTP error for {request.url.path}: {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": exc.errors(), "body": str(exc.body)},
     )
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception for {request.url.path}: {str(exc)}", exc_info=True)
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
     return JSONResponse(
-         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-         content={"detail": "智能体系统繁忙，请稍后再试。"},
-     )
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "智能体系统繁忙，请稍后再试。"},
+    )
 
 # 注册 Auth 路由
 app.include_router(auth_router)
+
+from infrastructure.tools.mcp.mcp_servers import search_mac_client, amap_map_mcp
+from multi_agent.technical_agent import technical_agent
+from multi_agent.service_agent import comprehensive_service_agent
+
+# 初始化数据库表与 MCP 服务
+@app.on_event("startup")
+async def startup_event():
+    try:
+        UserRepo.init_table()
+        logger.info("Database tables initialized.")
+    except Exception as e:
+        logger.error(f"Failed to initialize database tables: {e}")
+    
+    # 预连接 MCP 服务并注入子智能体，使用异步任务防止阻塞启动
+    async def init_mcp():
+        try:
+            await search_mac_client.connect()
+            technical_agent.mcp_servers = [search_mac_client]
+            logger.info("Connected to MCP Search service.")
+        except Exception as e:
+            logger.warning(f"Failed to connect to MCP Search service: {e}")
+            
+        try:
+            await amap_map_mcp.connect()
+            comprehensive_service_agent.mcp_servers = [amap_map_mcp]
+            logger.info("Connected to MCP Map service.")
+        except Exception as e:
+            logger.warning(f"Failed to connect to MCP Map service: {e}")
+            
+    asyncio.create_task(init_mcp())
 
 # 配置 CORS
 app.add_middleware(
@@ -154,6 +108,37 @@ from infrastructure.database.session_impl import SimpleSession
 import pickle
 import time
 
+# 统一文本提取逻辑
+def extract_text(obj, include_reasoning=False):
+    if not obj: return ""
+    if isinstance(obj, str): return obj
+    if isinstance(obj, list): return "".join([extract_text(i, include_reasoning) for i in obj])
+    
+    # 处理 OpenAI 风格的 Message/Delta 对象
+    content = getattr(obj, "content", None)
+    reasoning = getattr(obj, "reasoning_content", None)
+    
+    if content is None and isinstance(obj, dict):
+        content = obj.get("content")
+        reasoning = obj.get("reasoning_content")
+    
+    res = ""
+    if include_reasoning and reasoning:
+        res += f"**[思考过程]**\n{reasoning}\n\n---\n\n"
+    
+    if content:
+        if isinstance(content, str):
+            res += content
+        else:
+            res += extract_text(content, include_reasoning)
+            
+    # 备选：text 属性
+    if not res:
+        text = getattr(obj, "text", None) or (obj.get("text") if isinstance(obj, dict) else None)
+        if text: res = str(text)
+        
+    return res
+
 def get_session(session_id: str) -> Session:
     session_data = binary_redis_client.get(f"session:{session_id}")
     if session_data:
@@ -166,85 +151,7 @@ def get_session(session_id: str) -> Session:
     new_session = SimpleSession(session_id=session_id)
     return new_session
 
-# 统一文本提取逻辑
-def extract_text(obj, include_reasoning=False):
-    if not obj: return ""
-    if isinstance(obj, str): return obj
-    
-    res = ""
-    reasoning = ""
-    
-    if isinstance(obj, list):
-        for i in obj:
-            if isinstance(i, dict):
-                r = i.get("reasoning_content", "")
-                c = i.get("content", "")
-                if r: reasoning += str(r)
-                if c: res += str(c)
-            else:
-                res += extract_text(i)
-        return f"{reasoning}\n\n{res}" if (include_reasoning and reasoning) else res
-
-    if isinstance(obj, dict):
-        # 提取思考过程
-        reasoning = obj.get("reasoning_content", "")
-        # 优先尝试 content 属性或字段
-        content = obj.get("content")
-        if content and content is not obj:
-            res = extract_text(content)
-        else:
-            # 备选：text 属性或字段
-            text = obj.get("text")
-            if text: res = str(text)
-            # 处理 OpenAI 风格的 delta 对象
-            if "delta" in obj:
-                delta = obj["delta"]
-                reasoning = delta.get("reasoning_content", "")
-                res = delta.get("content", "")
-        
-        return f"{reasoning}\n\n{res}" if (include_reasoning and reasoning) else res
-
-    # 处理对象属性 (如 pydantic 模型)
-    if hasattr(obj, "reasoning_content") and obj.reasoning_content:
-        reasoning = str(obj.reasoning_content)
-    
-    if hasattr(obj, "content") and obj.content is not obj:
-        res = extract_text(obj.content)
-    elif hasattr(obj, "text"):
-        res = str(obj.text)
-    elif hasattr(obj, "delta"):
-        delta = obj.delta
-        if hasattr(delta, "reasoning_content"):
-            reasoning = str(delta.reasoning_content)
-        if hasattr(delta, "content"):
-            res = str(delta.content)
-            
-    return f"{reasoning}\n\n{res}" if (include_reasoning and reasoning) else res
-
-async def generate_title_from_llm(question: str) -> str:
-    """利用 LLM 提取精简的对话标题"""
-    try:
-        from infrastructure.ai.openai_client import sub_model_client
-        from config.settings import settings
-        
-        prompt = f"请为以下用户的问题提取一个极其精简的标题（不超过10个字），直接输出标题，不要包含标点符号：\n\n{question}"
-        
-        response = await sub_model_client.chat.completions.create(
-            model=settings.SUB_MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=20
-        )
-        title = response.choices[0].message.content.strip()
-        # 移除可能的引号
-        title = title.replace('"', '').replace('《', '').replace('》', '')
-        return title
-    except Exception as e:
-        logger.warning(f"Failed to generate title via LLM: {e}")
-        # 降级方案：截断原始问题
-        return question[:15] + ("..." if len(question) > 15 else "")
-
 def save_session(session_id: str, session: Session, user_id: str = None, app_type: str = "agent"):
-
     try:
         # 保存会话内容 (使用 pickle 以支持 agents 库的复杂对象)
         binary_redis_client.setex(
@@ -256,31 +163,31 @@ def save_session(session_id: str, session: Session, user_id: str = None, app_typ
         if user_id:
             # 使用有序集合存储，以时间戳排序，按 app_type 分离
             redis_client.zadd(f"user_sessions:{app_type}:{user_id}", {session_id: time.time()})
-            
-            # 自动提取标题逻辑
-            async def update_meta():
-                if not redis_client.exists(f"session_meta:{session_id}"):
-                    title = "新对话"
-                    if hasattr(session, 'items') and len(session.items) > 0:
-                        first_msg = session.items[0]
-                        raw_content = ""
-                        if isinstance(first_msg, dict):
-                            raw_content = first_msg.get("content", "")
-                        elif hasattr(first_msg, "content"):
-                            raw_content = first_msg.content
-                        
-                        question = extract_text(raw_content)
-                        if question:
-                            title = await generate_title_from_llm(question)
+            # 记录会话的元数据（如标题）
+            if not redis_client.exists(f"session_meta:{session_id}"):
+                # 初始标题使用第一条提问的前10个字
+                title = "新对话"
+                if hasattr(session, 'items') and len(session.items) > 0:
+                    first_msg = session.items[0]
+                    # 处理 dict 或 ResponseInputItemParam 对象
+                    content = ""
+                    if isinstance(first_msg, dict):
+                        content = first_msg.get("content", "")
+                    elif hasattr(first_msg, "content"):
+                         if isinstance(first_msg.content, list):
+                             for part in first_msg.content:
+                                 if hasattr(part, "text"): content += part.text
+                         elif isinstance(first_msg.content, str):
+                             content = first_msg.content
                     
-                    redis_client.hset(f"session_meta:{session_id}", mapping={
-                        "title": title,
-                        "created_at": time.time(),
-                        "app_type": app_type
-                    })
-            
-            # 由于 save_session 通常在同步上下文或需要快速响应的地方调用，使用 create_task
-            asyncio.create_task(update_meta())
+                    if content:
+                        title = content[:15] + ("..." if len(content) > 15 else "")
+                
+                redis_client.hset(f"session_meta:{session_id}", mapping={
+                    "title": title,
+                    "created_at": time.time(),
+                    "app_type": app_type
+                })
     except Exception as e:
         logger.error(f"Error saving session to redis: {e}")
 
@@ -310,7 +217,7 @@ async def get_session_detail(session_id: str, current_user: dict = Depends(get_c
         for item in session.items:
             role = item.get("role")
             raw_content = item.get("content")
-            # 这里改为 include_reasoning=True 以获取原汁原味的思考过程
+            # 使用全局的 extract_text，包含推理过程
             content = extract_text(raw_content, include_reasoning=True)
             
             if content:
@@ -320,6 +227,47 @@ async def get_session_detail(session_id: str, current_user: dict = Depends(get_c
                 })
     return {"history": history}
 
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, app_type: str = "agent", current_user: dict = Depends(get_current_user)):
+    user_id = current_user['username']
+    try:
+        # 从用户列表中移除
+        redis_client.zrem(f"user_sessions:{app_type}:{user_id}", session_id)
+        # 删除会话内容
+        binary_redis_client.delete(f"session:{session_id}")
+        # 删除元数据
+        redis_client.delete(f"session_meta:{session_id}")
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error deleting session: {e}")
+        raise HTTPException(status_code=500, detail="删除会话失败")
+
+class SessionTitleUpdate(BaseModel):
+    title: str
+
+@app.patch("/sessions/{session_id}")
+async def update_session_title(session_id: str, request: SessionTitleUpdate, current_user: dict = Depends(get_current_user)):
+    try:
+        logger.info(f"Updating session {session_id} title to: {request.title}")
+        meta_key = f"session_meta:{session_id}"
+        
+        if not redis_client.exists(meta_key):
+            logger.warning(f"Session meta not found: {meta_key}")
+            # 如果元数据不存在，可能是旧会话或未初始化的会话，尝试创建一个
+            redis_client.hset(meta_key, mapping={
+                "title": request.title,
+                "created_at": time.time(),
+                "app_type": "agent" # 默认 agent
+            })
+        else:
+            # 存在则只更新标题
+            redis_client.hset(meta_key, "title", request.title)
+            
+        return {"status": "success", "title": request.title}
+    except Exception as e:
+        logger.error(f"Failed to update session title for {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"更新标题失败: {str(e)}")
+
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit("5/minute")
 async def chat(request: Request, chat_request: ChatRequest, current_user: dict = Depends(get_current_user)):
@@ -327,9 +275,6 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         user_id = current_user['username']
         logger.info(f"User {user_id} asked: {chat_request.question}")
         session = get_session(chat_request.session_id)
-        
-        # 手动添加用户消息到 Session 以便持久化历史
-        await session.add_items([{"role": "user", "content": chat_request.question}])
         
         if chat_request.location:
             session.context["user_location"] = chat_request.location
@@ -367,7 +312,7 @@ async def chat_knowledge(request: Request, chat_request: ChatRequest, current_us
         user_id = current_user['username']
         session = get_session(chat_request.session_id)
         
-        # 手动添加用户消息到 Session
+        # 手动添加用户消息到 Session (管理平台不使用 Runner，需要手动维护)
         await session.add_items([{"role": "user", "content": chat_request.question}])
         
         # 直接调用知识库工具的原始函数 (严格 RAG)
@@ -397,18 +342,15 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
     流式对话接口 (SSE)
     """
     async def event_generator():
-        user_id = current_user['username']
-        session = get_session(chat_request.session_id)
         try:
+            user_id = current_user['username']
             logger.info(f"User {user_id} asked (stream): {chat_request.question}")
-            
-            # 手动添加用户消息到 Session 以便持久化历史
-            await session.add_items([{"role": "user", "content": chat_request.question}])
+            session = get_session(chat_request.session_id)
             
             if chat_request.location:
                 session.context["user_location"] = chat_request.location
             
-            # 使用 run_streamed 启动流式运行
+            # 使用 run_streamed 启动流式运行，传入 session 和 context
             stream = Runner.run_streamed(
                 orchestrator_agent, 
                 input=chat_request.question, 
@@ -418,6 +360,9 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             )
             
             async for event in stream.stream_events():
+                # 根据事件类型封装成 SSE 格式
+                # 过滤掉一些过于琐碎的原始响应事件，只发送关键的 run_item_stream_event 和 agent_updated_stream_event
+                
                 event_data = {
                     "type": str(event.type),
                 }
@@ -428,25 +373,23 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                     event_data["item_type"] = str(item.type)
                     
                     if item.type == "message_output_item":
+                        # 消息内容输出
                         content = ""
                         reasoning_content = ""
                         raw = item.raw_item
                         
-                        # 使用统一提取逻辑 (之前已在 event_generator 外定义或在此定义)
-                        if hasattr(raw, "content") and raw.content:
-                            content = extract_text(raw.content)
-                        elif hasattr(raw, "choices") and len(raw.choices) > 0:
+                        # 使用全局 extract_text
+                        content = extract_text(raw)
+                        reasoning_content = ""
+                        
+                        # 尝试直接从 raw 对象获取推理内容（OpenAI 格式）
+                        if hasattr(raw, "choices") and len(raw.choices) > 0:
                              delta = raw.choices[0].delta
-                             content = extract_text(getattr(delta, "content", ""))
-                             reasoning_content = extract_text(getattr(delta, "reasoning_content", ""))
+                             reasoning_content = getattr(delta, "reasoning_content", "")
                         elif isinstance(raw, dict):
                             choices = raw.get("choices", [])
                             if choices:
-                                delta = choices[0].get("delta", {})
-                                content = delta.get("content", "")
-                                reasoning_content = delta.get("reasoning_content", "")
-                            else:
-                                content = raw.get("content", "")
+                                reasoning_content = choices[0].get("delta", {}).get("reasoning_content", "")
                         
                         event_data["content"] = content
                         if reasoning_content:
@@ -471,17 +414,19 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 elif event.type == "agent_updated_stream_event":
                     event_data["new_agent"] = str(event.new_agent.name)
                 
+                # 发送 SSE 数据包，使用 default=str 确保所有不可序列化对象转为字符串
                 yield f"data: {json.dumps(event_data, ensure_ascii=False, default=str)}\n\n"
+            
+            # 保存会话状态到 Redis (包含 app_type 分离)
+            save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
+            
+            # 发送结束标记
+            yield "data: [DONE]\n\n"
             
         except Exception as e:
             logger.error(f"Error in streaming chat: {str(e)}")
             error_msg = json.dumps({"type": "error", "message": "服务内部错误"}, ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
-        finally:
-            # 无论是否异常或中断，都保存会话状态到 Redis
-            save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
-            # 发送结束标记
-            yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -489,5 +434,4 @@ if __name__ == "__main__":
     import uvicorn
     print("准备启动应用后端 (开发模式 - 热重载已开启)")
     # 使用字符串路径以支持 reload=True
-    # 在 Windows 下，reload 会开启子进程，需要确保 sys.path 在子进程中也被正确设置
-    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=True)

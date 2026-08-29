@@ -21,15 +21,6 @@ async def resolve_user_location_from_text(ctx: RunContextWrapper, text: str) -> 
     返回格式: "lat,lng"
     """
     session = ctx.context
-    
-    # 1. 优先从会话上下文中获取（前端传来的真实位置）
-    if session and hasattr(session, 'context') and session.context.get("user_location"):
-        logger.info(f"Using location from session context: {session.context['user_location']}")
-        return session.context["user_location"]
-    
-    # 2. 尝试从文本中解析地点信息（如果用户提到了城市或区域）
-    # 在实际生产中，这里可以调用一个轻量级模型来识别地点并调用地理编码接口
-    # 为了演示真实感，如果文本中包含常见城市名，我们返回该城市的中心坐标
     city_coords = {
         "武汉": "30.5928,114.3055",
         "上海": "31.2304,121.4737",
@@ -38,59 +29,100 @@ async def resolve_user_location_from_text(ctx: RunContextWrapper, text: str) -> 
         "杭州": "30.2741,120.1551",
         "南京": "32.0603,118.7969",
         "成都": "30.5728,104.0668",
+        "北京": "39.9042,116.4074"
     }
     
+    # 1. 优先从会话上下文中获取（前端传来的位置）
+    if session and hasattr(session, 'context') and session.context.get("user_location"):
+        loc = session.context["user_location"]
+        # 如果是坐标格式 "lat,lng"，直接返回
+        if "," in loc and all(c.isdigit() or c == "." or c == "-" for c in loc.replace(",", "")):
+            logger.info(f"Using coordinates from session context: {loc}")
+            return loc
+        # 如果是城市名，尝试转换
+        for city, coords in city_coords.items():
+            if city in loc:
+                logger.info(f"Resolved city '{loc}' from context to coordinates: {coords}")
+                return coords
+    
+    # 2. 尝试从提问文本中解析地点信息
     for city, coords in city_coords.items():
         if city in text:
             logger.info(f"Detected city '{city}' in text, using coordinates: {coords}")
             return coords
 
-    # 3. 兜底逻辑：如果都没有，且用户明确说“不在北京”，则提示需要位置信息或返回一个默认非北京坐标
-    # 这里我们返回一个默认坐标，但在实际应用中应该请求用户授权或输入位置
-    logger.warning("No location info found in context or text. Falling back to default.")
-    return "40.078,116.345"
+    # 3. 兜底逻辑
+    logger.warning("No location info found. Falling back to default center (Beijing).")
+    return "39.9042,116.4074"
 
 @function_tool
-async def query_nearest_repair_shops_by_coords(coords: str) -> str:
+async def query_nearest_repair_shops_by_coords(ctx: RunContextWrapper, coords: str, brand: str = None) -> str:
     """
     根据经纬度查询最近的维修站。
-    coords 格式: "lat,lng"
+    
+    Args:
+        coords: 经纬度，格式: "lat,lng"
+        brand: 可选，品牌名称（如 "联想", "小米", "华为"），用于过滤结果
     """
-    logger.info(f"Querying repair shops near: {coords}")
+    logger.info(f"Querying {brand or ''} repair shops near: {coords}")
     lat, lng = map(float, coords.split(','))
+    
+    # 检查是否是默认坐标
+    is_default = (coords == "39.9042,116.4074")
     
     conn = pool.connection()
     try:
         with conn.cursor() as cursor:
-            # 先获取所有站点，计算精确距离后再排序（数据量小可以这么做）
-            cursor.execute("SELECT name, address, phone, lat, lng FROM service_stations")
+            if brand:
+                # 简单的模糊匹配
+                cursor.execute("SELECT name, address, phone, lat, lng FROM service_stations WHERE name LIKE %s OR brand LIKE %s", 
+                               (f"%{brand}%", f"%{brand}%"))
+            else:
+                cursor.execute("SELECT name, address, phone, lat, lng FROM service_stations")
+            
             results = cursor.fetchall()
             
             if not results:
-                return "本地数据库中未找到附近的维修站信息。请尝试使用高德地图工具进行在线搜索。"
+                return f"本地数据库中未找到附近的 {brand or ''} 维修站信息。建议使用高德地图工具进行在线搜索。"
             
-            # 计算距离并排序
             stations = []
             for row in results:
-                dist = haversine(lat, lng, float(row[3]), float(row[4]))
+                s_lat, s_lng = float(row[3]), float(row[4])
+                dist = haversine(lat, lng, s_lat, s_lng)
                 stations.append({
                     "name": row[0],
                     "address": row[1],
                     "phone": row[2],
+                    "lat": s_lat,
+                    "lng": s_lng,
                     "dist": dist
                 })
             
             stations.sort(key=lambda x: x['dist'])
-            top_3 = [s for s in stations if s['dist'] < 50] # 仅显示 50km 以内的
+            # 距离阈值设定
+            top_3 = [s for s in stations if s['dist'] < 100]
             
             if not top_3:
-                return f"在 {coords} 附近 50km 内未找到本地记录的维修站。建议使用高德地图在线搜索更多实时信息。"
+                return f"在您的位置附近 100km 内未找到本地记录的 {brand or ''} 维修站。建议使用高德地图在线搜索。"
             
-            response = f"为您找到 {coords} 附近最近的维修站：\n"
+            response = ""
+            if is_default:
+                response += f"⚠️ **提示**：未获取到您的精确位置，已为您推荐北京市中心附近的 {brand or ''} 维修站：\n\n"
+            else:
+                response += f"为您找到距离您约 {stations[0]['dist']:.2f}km 起的 {brand or ''} 维修站：\n\n"
+
             for s in top_3:
-                # 生成高德地图搜索链接
-                map_url = f"https://www.amap.com/search?query={s['name']}"
-                response += f"- **{s['name']}**: {s['address']} (电话: {s['phone']}, 距离: {s['dist']:.2f}km) [点击导航]({map_url})\n"
+                # 生成带坐标的真实高德导航链接
+                # 格式：https://uri.amap.com/marker?position=lng,lat&name=名称
+                nav_url = f"https://uri.amap.com/marker?position={s['lng']},{s['lat']}&name={s['name']}"
+                response += f"### {s['name']}\n"
+                response += f"- **地址** ：{s['address']}\n"
+                response += f"- **电话** ：{s['phone']}\n"
+                response += f"- **距离** ：{s['dist']:.2f}公里\n"
+                response += f"- **导航** ：[点击前往高德地图查看路线]({nav_url})\n\n"
+            
+            if is_default:
+                response += "注：如需更精准的距离计算，请允许浏览器获取您的位置信息。"
             return response
     finally:
         conn.close()

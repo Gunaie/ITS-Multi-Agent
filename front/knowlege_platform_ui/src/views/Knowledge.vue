@@ -104,23 +104,25 @@ const tableRowClassName = ({ rowIndex }) => {
 .page-header {
   margin-bottom: 30px;
   h2 {
-    color: #fff;
+    color: var(--text-main);
     margin-bottom: 10px;
   }
   .subtitle {
-    color: #8b949e;
+    color: var(--text-sub);
     font-size: 14px;
   }
 }
 
 .upload-card {
-  background-color: #161b22;
-  border: 1px solid #30363d;
-  color: #c9d1d9;
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
   margin-bottom: 30px;
+  box-shadow: var(--shadow-sm);
+  border-radius: 12px;
 
   :deep(.el-card__header) {
-    border-bottom: 1px solid #30363d;
+    border-bottom: 1px solid var(--divider-color);
   }
 }
 
@@ -128,22 +130,22 @@ const tableRowClassName = ({ rowIndex }) => {
   padding: 20px;
   
   :deep(.el-upload-dragger) {
-    background-color: #0d1117;
-    border-color: #30363d;
+    background-color: var(--sidebar-bg);
+    border-color: var(--border-color);
     
     &:hover {
-      border-color: #409EFF;
-      background-color: #161b22;
+      border-color: var(--primary-blue);
+      background-color: var(--divider-color);
     }
     
     .el-icon--upload {
-      color: #58a6ff;
+      color: var(--primary-blue);
     }
     
     .el-upload__text {
-      color: #8b949e;
+      color: var(--text-sub);
       em {
-        color: #58a6ff;
+        color: var(--primary-blue);
       }
     }
   }
@@ -151,23 +153,23 @@ const tableRowClassName = ({ rowIndex }) => {
 
 .history-section {
   h3 {
-    color: #fff;
+    color: var(--text-main);
     margin-bottom: 20px;
   }
   
   :deep(.el-table) {
-    background-color: #161b22;
-    color: #c9d1d9;
-    --el-table-border-color: #30363d;
-    --el-table-header-bg-color: #0d1117;
-    --el-table-row-hover-bg-color: #1f242d;
+    background-color: var(--card-bg);
+    color: var(--text-main);
+    --el-table-border-color: var(--border-color);
+    --el-table-header-bg-color: var(--sidebar-bg);
+    --el-table-row-hover-bg-color: var(--divider-color);
     
     th, tr {
-      background-color: #161b22;
+      background-color: var(--card-bg);
     }
     
     .success-row {
-      background-color: #1c2518;
+      background-color: #f0fdf4;
     }
   }
 }

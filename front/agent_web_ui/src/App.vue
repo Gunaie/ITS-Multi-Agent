@@ -11,7 +11,7 @@
         <el-button class="new-chat-btn" plain @click="handleNewChat">
           <el-icon><Plus /></el-icon>
           <span>新建对话</span>
-          <span class="shortcut">⌘+K</span>
+          <span class="shortcut">Ctrl+K</span>
         </el-button>
         
         <nav class="sidebar-menu">
@@ -19,9 +19,10 @@
             <el-icon><ChatDotRound /></el-icon>
             <span>智能咨询</span>
           </div>
-          <div class="menu-item" :class="{ active: currentPath === '/knowledge' }" @click="currentPath = '/knowledge'">
+          <div class="menu-item" @click="handleGoToKnowledge">
             <el-icon><Management /></el-icon>
             <span>知识库管理</span>
+            <el-icon class="external-icon"><TopRight /></el-icon>
           </div>
         </nav>
         
@@ -37,7 +38,27 @@
               @click="handleSessionClick(session.id)"
             >
               <el-icon class="session-icon"><ChatLineRound /></el-icon>
-              <span class="session-title">{{ session.title }}</span>
+              
+              <div v-if="editingId === session.id" class="session-edit-box" @click.stop>
+                <el-input 
+                  v-model="editingTitle" 
+                  size="small" 
+                  ref="editInput"
+                  @blur="submitEdit"
+                  @keyup.enter="submitEdit"
+                  @keyup.esc="cancelEdit"
+                />
+              </div>
+              <span v-else class="session-title">{{ session.title }}</span>
+
+              <div class="session-ops" @click.stop>
+                <el-icon class="op-icon" @click="startEdit(session)"><Edit /></el-icon>
+                <el-popconfirm title="确定要删除这段对话吗？" @confirm="handleDelete(session.id)">
+                  <template #reference>
+                    <el-icon class="op-icon delete"><Delete /></el-icon>
+                  </template>
+                </el-popconfirm>
+              </div>
             </div>
           </div>
           <div class="status-indicator">
@@ -110,10 +131,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import Chat from './views/Chat.vue'
-import { Plus, ChatDotRound, Management, Location, Connection, Menu, ChatLineRound } from '@element-plus/icons-vue'
-import { login, register, getSessions } from '@/api/app'
+import { Plus, ChatDotRound, Management, Location, Connection, Menu, ChatLineRound, TopRight, Edit, Delete } from '@element-plus/icons-vue'
+import { login, register, getSessions, deleteSession, updateSessionTitle } from '@/api/app'
 import { ElMessage } from 'element-plus'
 
 const isLoggedIn = ref(!!localStorage.getItem('token'))
@@ -128,6 +149,56 @@ const authForm = ref({
 const currentPath = ref('/chat')
 const currentSessionId = ref(Math.random().toString(36).substring(7))
 const sessionList = ref([])
+
+// 编辑标题相关
+const editingId = ref(null)
+const editingTitle = ref('')
+const editInput = ref(null)
+
+const startEdit = (session) => {
+  editingId.value = session.id
+  editingTitle.value = session.title
+  nextTick(() => {
+    editInput.value?.focus()
+  })
+}
+
+const submitEdit = async () => {
+  if (!editingId.value) return
+  if (!editingTitle.value.trim()) {
+    cancelEdit()
+    return
+  }
+  
+  try {
+    await updateSessionTitle(editingId.value, editingTitle.value.trim())
+    const session = sessionList.value.find(s => s.id === editingId.value)
+    if (session) session.title = editingTitle.value.trim()
+    ElMessage.success('标题已更新')
+  } catch (err) {
+    ElMessage.error('更新标题失败')
+  } finally {
+    editingId.value = null
+  }
+}
+
+const cancelEdit = () => {
+  editingId.value = null
+  editingTitle.value = ''
+}
+
+const handleDelete = async (sid) => {
+  try {
+    await deleteSession(sid)
+    sessionList.value = sessionList.value.filter(s => s.id !== sid)
+    if (currentSessionId.value === sid) {
+      handleNewChat()
+    }
+    ElMessage.success('会话已删除')
+  } catch (err) {
+    ElMessage.error('删除会话失败')
+  }
+}
 
 const currentSessionTitle = computed(() => {
   const session = sessionList.value.find(s => s.id === currentSessionId.value)
@@ -152,6 +223,10 @@ const handleNewChat = () => {
 const handleSessionClick = (sid) => {
   currentSessionId.value = sid
   currentPath.value = '/chat'
+}
+
+const handleGoToKnowledge = () => {
+  window.open('http://localhost:3000', '_blank')
 }
 
 const handleAuth = async () => {
@@ -373,6 +448,16 @@ body {
   border-radius: 0 4px 4px 0;
 }
 
+.external-icon {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+.menu-item:hover .external-icon {
+  opacity: 1;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 20px;
@@ -405,6 +490,38 @@ body {
 .session-item:hover {
   background-color: #F1F5F9;
   color: var(--text-main);
+}
+
+.session-item:hover .session-ops {
+  display: flex;
+}
+
+.session-ops {
+  display: none;
+  gap: 5px;
+  margin-left: 5px;
+}
+
+.op-icon {
+  font-size: 14px;
+  color: var(--text-sub);
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.op-icon:hover {
+  background-color: var(--divider-color);
+  color: var(--primary-blue);
+}
+
+.op-icon.delete:hover {
+  color: #F56C6C;
+}
+
+.session-edit-box {
+  flex: 1;
+  margin-right: 5px;
 }
 
 .session-item.active {

@@ -97,6 +97,18 @@
             @keydown.enter.exact.prevent="handleSend"
           />
           <div class="input-actions">
+            <div 
+              class="location-status" 
+              :class="{ 'has-location': !!userLocation, 'is-loading': locationLoading }" 
+              @click="getUserLocation"
+              title="点击获取或刷新实时位置"
+            >
+              <el-icon :class="{ 'is-loading': locationLoading }">
+                <Loading v-if="locationLoading" />
+                <Location v-else />
+              </el-icon>
+              <span>{{ locationLoading ? '正在定位...' : (userLocation ? (userLocation.includes(',') ? '已获取实时位置' : `位置: ${userLocation}`) : '未获取位置') }}</span>
+            </div>
             <el-button 
               type="primary" 
               class="send-btn" 
@@ -121,6 +133,7 @@ import { ref, nextTick, onMounted, watch } from 'vue'
 import { chatWithAgent, chatStreamWithAgent, getSessionDetail } from '@/api/app'
 import { marked } from 'marked'
 import { Monitor, Location, Download, Position, Loading, List, ArrowDown } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const props = defineProps({
   sessionId: {
@@ -133,6 +146,7 @@ const emit = defineEmits(['session-updated'])
 
 const userInput = ref('')
 const loading = ref(false)
+const locationLoading = ref(false)
 const messages = ref([])
 const messagesRef = ref(null)
 const userLocation = ref(null)
@@ -161,17 +175,50 @@ watch(() => props.sessionId, (newSid) => {
 }, { immediate: true })
 
 const getUserLocation = () => {
+  if (locationLoading.value) return
+  
   if (navigator.geolocation) {
+    locationLoading.value = true
+    ElMessage.info('正在尝试获取您的实时位置...')
+    
     navigator.geolocation.getCurrentPosition(
       (position) => {
         userLocation.value = `${position.coords.latitude},${position.coords.longitude}`
+        ElMessage.success('位置获取成功')
         console.log('User location acquired:', userLocation.value)
+        locationLoading.value = false
       },
       (error) => {
         console.warn('Error getting location:', error.message)
-      }
+        locationLoading.value = false
+        
+        let errorMsg = '无法获取位置'
+        if (error.code === 1) errorMsg = '定位权限被拒绝'
+        else if (error.code === 2) errorMsg = '暂时无法获取位置信息'
+        else if (error.code === 3) errorMsg = '定位请求超时'
+        
+        // 自动定位失败，转为手动输入
+        handleManualLocation(errorMsg + '，请手动输入您所在的城市：')
+      },
+      { timeout: 8000, enableHighAccuracy: true }
     )
+  } else {
+    handleManualLocation('浏览器不支持自动定位，请手动输入您所在的城市：')
   }
+}
+
+const handleManualLocation = (customMsg) => {
+  ElMessageBox.prompt(customMsg || '请输入您所在的城市（如：武汉、上海）以获得附近服务站信息：', '手动设置位置', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    inputPattern: /^[\u4e00-\u9fa5]{2,20}$/,
+    inputErrorMessage: '请输入正确的城市名称（2-20位中文）',
+  }).then(({ value }) => {
+    userLocation.value = value
+    ElMessage.success(`位置已手动设为: ${value}`)
+  }).catch(() => {
+    ElMessage.info('已取消手动设置')
+  })
 }
 
 const scrollToBottom = () => {
@@ -201,14 +248,27 @@ const handleSend = async () => {
   const text = userInput.value
   userInput.value = ''
   
-  // 检查是否需要获取位置（包含维修站、附近、导航等关键词）
-  const locationKeywords = ['维修站', '服务站', '售后', '附近', '导航', '去这里', '地点']
+  // 强制检测位置需求：包含关键词或查询地图时
+  const locationKeywords = ['维修站', '服务站', '售后', '附近', '导航', '去这里', '地点', '哪里有']
   const needsLocation = locationKeywords.some(k => text.includes(k))
   
-  if (needsLocation && !userLocation.value) {
+  // 如果需要位置但还没获取到，尝试获取一次（带超时）
+  if (needsLocation && !userLocation.value && navigator.geolocation) {
     console.log('Detected location-related query, requesting permission...')
-    getUserLocation()
-    // 注意：getUserLocation 是异步的，这里不阻塞发送，后续轮次会带上位置
+    await new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          userLocation.value = `${position.coords.latitude},${position.coords.longitude}`
+          console.log('User location acquired:', userLocation.value)
+          resolve()
+        },
+        (error) => {
+          console.warn('Error getting location:', error.message)
+          resolve() // 报错也继续，使用后端兜底
+        },
+        { timeout: 5000 }
+      )
+    })
   }
 
   messages.value.push({
@@ -305,7 +365,8 @@ const handleSend = async () => {
 }
 
 onMounted(() => {
-  // 不再自动获取位置，改为按需获取以保护隐私
+  // 页面加载时主动尝试获取一次位置
+  getUserLocation()
 })
 </script>
 
@@ -622,8 +683,53 @@ onMounted(() => {
 
 .input-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 8px;
+}
+
+.location-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-sub);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.location-status:hover {
+  background-color: #F1F5F9;
+}
+
+.location-status.has-location {
+  color: var(--primary-blue);
+}
+
+.location-status.has-location .el-icon {
+  animation: pulse 2s infinite;
+}
+
+.location-status.is-loading {
+  color: var(--primary-blue);
+  cursor: wait;
+}
+
+.is-loading {
+  animation: rotating 2s linear infinite;
+}
+
+@keyframes rotating {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
 }
 
 .send-btn {

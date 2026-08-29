@@ -75,6 +75,22 @@ export function getSessionDetail(sessionId) {
   })
 }
 
+export function deleteSession(sessionId) {
+  return service({
+    url: `/sessions/${sessionId}`,
+    method: 'delete',
+    params: { app_type: 'agent' }
+  })
+}
+
+export function updateSessionTitle(sessionId, title) {
+  return service({
+    url: `/sessions/${sessionId}`,
+    method: 'patch',
+    data: { title }
+  })
+}
+
 export function chatStreamWithAgent(data, onMessage, onDone, onError) {
   const controller = new AbortController();
   const signal = controller.signal;

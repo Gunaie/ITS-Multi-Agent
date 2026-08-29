@@ -21,7 +21,7 @@ def init_db():
                     lat DOUBLE NOT NULL,
                     lng DOUBLE NOT NULL,
                     phone VARCHAR(50),
-                    type VARCHAR(50)
+                    brand VARCHAR(50)
                 )
             """)
             
@@ -30,12 +30,28 @@ def init_db():
                 ("联想服务中心 (昌平店)", "北京市昌平区回龙观西大街", 40.078, 116.345, "010-12345678", "Lenovo"),
                 ("小米之家 (海淀店)", "北京市海淀区清河中街", 40.033, 116.341, "010-87654321", "Xiaomi"),
                 ("华为授权服务中心 (朝阳店)", "北京市朝阳区建国门外大街", 39.908, 116.453, "010-11223344", "Huawei"),
-                ("苹果授权维修点 (三里屯)", "北京市朝阳区三里屯路", 39.933, 116.455, "010-55667788", "Apple")
+                ("苹果授权维修点 (三里屯)", "北京市朝阳区三里屯路", 39.933, 116.455, "010-55667788", "Apple"),
+                # 新增武汉数据
+                ("联想服务中心 (武汉洪山广场店)", "武汉市洪山区民主路 782 号", 30.542, 114.332, "027-88991122", "Lenovo"),
+                ("联想服务中心 (武汉汉口火车站店)", "武汉市江汉区发展大道 179 号", 30.619, 114.255, "027-66554433", "Lenovo"),
+                ("小米之家 (武汉光谷广场店)", "武汉市洪山区民族大道 1 号", 30.506, 114.392, "027-99887766", "Xiaomi")
             ]
             
-            cursor.execute("DELETE FROM service_stations")
+            cursor.execute("DROP TABLE IF EXISTS service_stations")
+            cursor.execute("""
+                CREATE TABLE service_stations (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    address VARCHAR(255) NOT NULL,
+                    lat DOUBLE NOT NULL,
+                    lng DOUBLE NOT NULL,
+                    phone VARCHAR(50),
+                    brand VARCHAR(50)
+                )
+            """)
+            
             cursor.executemany(
-                "INSERT INTO service_stations (name, address, lat, lng, phone, type) VALUES (%s, %s, %s, %s, %s, %s)",
+                "INSERT INTO service_stations (name, address, lat, lng, phone, brand) VALUES (%s, %s, %s, %s, %s, %s)",
                 stations
             )
             
