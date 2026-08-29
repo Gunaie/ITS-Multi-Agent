@@ -394,4 +394,6 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    print("准备启动应用后端 (开发模式 - 热重载已开启)")
+    # 使用字符串路径以支持 reload=True
+    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=True)

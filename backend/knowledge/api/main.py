@@ -36,9 +36,11 @@ def  create_fast_api()->FastAPI:
 app = create_fast_api()
 
 if __name__ == '__main__':
-    print("1.准备启动Web服务器")
+    print("1.准备启动Web服务器 (开发模式 - 热重载已开启)")
     try:
-        uvicorn.run(app=app,host="127.0.0.1",port=8001)
+        # 注意：使用 reload=True 时必须传入字符串形式的 app 路径
+        # 且需要在 backend/knowledge 目录下运行，或者正确设置 PYTHONPATH
+        uvicorn.run("api.main:app", host="127.0.0.1", port=8001, reload=True)
         logger.info("2.启动Web服务器成功...")
     except KeyboardInterrupt as e:
         logger.error(f"2.启动Web服务器失败: {str(e)}")
