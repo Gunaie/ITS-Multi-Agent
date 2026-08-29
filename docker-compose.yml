@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # 知识库服务 (Knowledge API)
+  knowledge-api:
+    build: ./backend/knowledge
+    container_name: its-knowledge-api
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/knowledge/chroma_kb1:/app/chroma_kb1
+      - ./backend/knowledge/data:/app/data
+    environment:
+      - OPENAI_API_KEY=${AL_BAILIAN_API_KEY}
+      - OPENAI_BASE_URL=${AL_BAILIAN_BASE_URL}
+    networks:
+      - its-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # 主智能体服务 (Main Backend)
+  main-backend:
+    build: ./backend/app
+    container_name: its-main-backend
+    ports:
+      - "8002:8002"
+    environment:
+      - AL_BAILIAN_API_KEY=${AL_BAILIAN_API_KEY}
+      - AL_BAILIAN_BASE_URL=${AL_BAILIAN_BASE_URL}
+      - MAIN_MODEL_NAME=${MAIN_MODEL_NAME}
+      - SUB_MODEL_NAME=${SUB_MODEL_NAME}
+      - MYSQL_HOST=host.docker.internal
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-12345678}
+      - MYSQL_DATABASE=its
+      - REDIS_HOST=host.docker.internal
+      - REDIS_PORT=6379
+      - KNOWLEDGE_BASE_URL=http://knowledge-api:8001
+    networks:
+      - its-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - knowledge-api
+
+  # 前端 UI
+  frontend:
+    build: ./front/agent_web_ui
+    container_name: its-frontend
+    ports:
+      - "80:80"
+    networks:
+      - its-network
+    depends_on:
+      - main-backend
+      - knowledge-api
+
+networks:
+  its-network:
+    driver: bridge

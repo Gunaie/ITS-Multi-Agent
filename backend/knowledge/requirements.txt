@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+aiofiles
+langchain
+langchain-community
+langchain-text-splitters
+langchain-openai
+chromadb
+unstructured[all-docs]
+python-magic
+python-dotenv
+pydantic-settings
