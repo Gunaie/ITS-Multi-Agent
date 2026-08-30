@@ -7,7 +7,7 @@
 在项目根目录下，使用统一的开发模式启动脚本：
 
 ```powershell
-python start_dev.py
+python scripts/start_dev.py
 ```
 
 该脚本将一键启动以下服务：
@@ -15,6 +15,13 @@ python start_dev.py
 - **咨询平台 (UI)**: [http://localhost:3002](http://localhost:3002)
 - **知识库后端 (API)**: [http://127.0.0.1:8001](http://127.0.0.1:8001)
 - **应用后端 (API)**: [http://127.0.0.1:8002](http://127.0.0.1:8002)
+
+## 🔧 维护工具
+
+在 `scripts/` 目录下提供了一些常用的维护脚本：
+
+- **数据初始化**: `python scripts/init_db_enriched.py` (向数据库注入真实的网点测试数据)
+- **缓存清理**: `python scripts/flush_redis.py` (清空 Redis 中的所有会话缓存)
 
 ## 🏗️ 项目架构
 
@@ -55,7 +62,8 @@ its_multi_agent/
 │   ├── agent_web_ui/  # 咨询平台前端
 │   └── knowlege_platform_ui/ # 管理平台前端
 ├── data/              # 共享数据目录 (MySQL/Chroma 数据持久化)
-└── start_dev.py       # 统一开发模式启动脚本
+├── tests/             # 结构化测试套件 (Unit/Integration/Playground)
+└── scripts/           # 统一开发启动与数据库维护脚本
 ```
 
 ## ⚠️ 开发注意事项

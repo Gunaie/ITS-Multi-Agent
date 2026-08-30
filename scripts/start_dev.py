@@ -6,6 +6,9 @@ import time
 import signal
 import io
 
+# 获取项目根目录 (即 scripts 目录的上一级)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 # 强制设置输出编码为 UTF-8 以支持 Emoji
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -14,24 +17,24 @@ if sys.stdout.encoding != 'utf-8':
 SERVICES = [
     {
         "name": "Knowledge API (8001)",
-        "cwd": os.path.join(os.getcwd(), "backend", "knowledge"),
-        "command": ["uv", "run", "python", os.path.join(os.getcwd(), "backend", "knowledge", "api", "main.py")],
-        "env_add": {"PYTHONPATH": os.path.join(os.getcwd(), "backend", "knowledge")}
+        "cwd": os.path.join(PROJECT_ROOT, "backend", "knowledge"),
+        "command": ["uv", "run", "python", os.path.join(PROJECT_ROOT, "backend", "knowledge", "api", "main.py")],
+        "env_add": {"PYTHONPATH": os.path.join(PROJECT_ROOT, "backend", "knowledge")}
     },
     {
         "name": "App Backend (8002)",
-        "cwd": os.path.join(os.getcwd(), "backend", "app"),
-        "command": ["uv", "run", "python", os.path.join(os.getcwd(), "backend", "app", "main.py")],
-        "env_add": {"PYTHONPATH": os.path.join(os.getcwd(), "backend", "app")}
+        "cwd": os.path.join(PROJECT_ROOT, "backend", "app"),
+        "command": ["uv", "run", "python", os.path.join(PROJECT_ROOT, "backend", "app", "main.py")],
+        "env_add": {"PYTHONPATH": os.path.join(PROJECT_ROOT, "backend", "app")}
     },
     {
         "name": "Knowledge UI (3000)",
-        "cwd": os.path.join(os.getcwd(), "front", "knowlege_platform_ui"),
+        "cwd": os.path.join(PROJECT_ROOT, "front", "knowlege_platform_ui"),
         "command": ["npm.cmd" if os.name == 'nt' else "npm", "run", "dev"]
     },
     {
         "name": "Agent UI (3002)",
-        "cwd": os.path.join(os.getcwd(), "front", "agent_web_ui"),
+        "cwd": os.path.join(PROJECT_ROOT, "front", "agent_web_ui"),
         "command": ["npm.cmd" if os.name == 'nt' else "npm", "run", "dev"]
     }
 ]
