@@ -40,21 +40,22 @@
             :key="session.id" 
             class="session-item"
             :class="{ active: currentSessionId === session.id }"
-            @click="handleSessionClick(session.id)"
           >
-            <el-icon><ChatLineRound /></el-icon>
-            
-            <div v-if="editingId === session.id" class="session-edit-box" @click.stop>
-              <el-input 
-                v-model="editingTitle" 
-                size="small" 
-                ref="editInput"
-                @blur="submitEdit"
-                @keyup.enter="submitEdit"
-                @keyup.esc="cancelEdit"
-              />
+            <div class="session-item-main" @click="handleSessionClick(session.id)">
+              <el-icon><ChatLineRound /></el-icon>
+              
+              <div v-if="editingId === session.id" class="session-edit-box" @click.stop>
+                <el-input 
+                  v-model="editingTitle" 
+                  size="small" 
+                  ref="editInput"
+                  @blur="submitEdit"
+                  @keyup.enter="submitEdit"
+                  @keyup.esc="cancelEdit"
+                />
+              </div>
+              <span v-else class="session-title">{{ session.title }}</span>
             </div>
-            <span v-else class="session-title">{{ session.title }}</span>
 
             <div class="session-ops" @click.stop>
               <el-icon class="op-icon" @click="startEdit(session)"><Edit /></el-icon>
@@ -255,7 +256,7 @@ onMounted(() => {
       .session-item {
         display: flex;
         align-items: center;
-        gap: 10px;
+        justify-content: space-between;
         padding: 8px 12px;
         border-radius: 6px;
         cursor: pointer;
@@ -263,6 +264,14 @@ onMounted(() => {
         color: var(--text-sub);
         font-size: 13px;
         transition: all 0.2s;
+
+        .session-item-main {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex: 1;
+          overflow: hidden;
+        }
 
         &:hover {
           background-color: var(--divider-color);
@@ -279,13 +288,13 @@ onMounted(() => {
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          flex: 1;
         }
 
         .session-ops {
           display: none;
           gap: 5px;
           margin-left: 5px;
+          flex-shrink: 0;
         }
 
         &:hover .session-ops {

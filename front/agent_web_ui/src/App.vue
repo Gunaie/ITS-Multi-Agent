@@ -35,21 +35,22 @@
               :key="session.id" 
               class="session-item"
               :class="{ active: currentSessionId === session.id }"
-              @click="handleSessionClick(session.id)"
             >
-              <el-icon class="session-icon"><ChatLineRound /></el-icon>
-              
-              <div v-if="editingId === session.id" class="session-edit-box" @click.stop>
-                <el-input 
-                  v-model="editingTitle" 
-                  size="small" 
-                  ref="editInput"
-                  @blur="submitEdit"
-                  @keyup.enter="submitEdit"
-                  @keyup.esc="cancelEdit"
-                />
+              <div class="session-item-main" @click="handleSessionClick(session.id)">
+                <el-icon class="session-icon"><ChatLineRound /></el-icon>
+                
+                <div v-if="editingId === session.id" class="session-edit-box" @click.stop>
+                  <el-input 
+                    v-model="editingTitle" 
+                    size="small" 
+                    ref="editInput"
+                    @blur="submitEdit"
+                    @keyup.enter="submitEdit"
+                    @keyup.esc="cancelEdit"
+                  />
+                </div>
+                <span v-else class="session-title">{{ session.title }}</span>
               </div>
-              <span v-else class="session-title">{{ session.title }}</span>
 
               <div class="session-ops" @click.stop>
                 <el-icon class="op-icon" @click="startEdit(session)"><Edit /></el-icon>
@@ -481,13 +482,21 @@ body {
 .session-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
   padding: 10px;
   border-radius: 8px;
   cursor: pointer;
   margin-bottom: 4px;
   transition: all 0.2s;
   color: var(--text-sub);
+}
+
+.session-item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  overflow: hidden;
 }
 
 .session-item:hover {
@@ -503,6 +512,7 @@ body {
   display: none;
   gap: 5px;
   margin-left: 5px;
+  flex-shrink: 0;
 }
 
 .op-icon {
@@ -535,6 +545,7 @@ body {
 
 .session-icon {
   font-size: 14px;
+  flex-shrink: 0;
 }
 
 .session-title {
@@ -542,7 +553,6 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
 }
 
 .history-title {
