@@ -25,14 +25,38 @@ python scripts/start_dev.py
 
 ## 🏗️ 项目架构
 
-项目采用微服务解耦设计，分为三个核心部分：
+项目采用微服务解耦设计，核心架构逻辑如下：
+
+```mermaid
+graph TD
+    User((用户)) <--> Front[前端: Vue 3]
+    Front <--> AppAPI[App Backend: FastAPI]
+    
+    subgraph "Orchestration Layer"
+        AppAPI <--> Orchestrator[智能调度专家]
+        Orchestrator <--> TechAgent[技术支持专家]
+        Orchestrator <--> ServiceAgent[业务服务专家]
+    end
+    
+    subgraph "Capability Layer"
+        TechAgent <--> KB[知识库 RAG 引擎]
+        TechAgent <--> MCP[MCP 联网搜索]
+        ServiceAgent <--> BaiduMap[百度地图 API]
+    end
+    
+    subgraph "Data Layer"
+        AppAPI <--> Redis[(Redis: Session)]
+        AppAPI <--> MySQL[(MySQL: User)]
+        KB <--> Chroma[(ChromaDB: Vector)]
+    end
+```
 
 ### 1. 应用后端 (`backend/app`)
 作为系统的“大脑”与“神经中枢”，负责 Agent 编排与业务逻辑。
 - **智能调度专家 (Orchestrator)**: 基于意图识别，将任务分发给技术或服务专家。
-- **多智能体协作**: 采用 `tiny-agents` 框架实现 Agent 间的任务交接（Handoff）。
-- **外部能力集成**: 通过 **MCP (Model Context Protocol)** 接入联网搜索与高德地图服务。
-- **会话持久化**: 基于 Redis + Pickle 实现分布式 Session 管理，支持多平台会话隔离。
+- **多智能体协作**: 采用多智能体协作架构，支持 Agent 间的任务交接（Handoff）。
+- **外部能力集成**: 通过 **MCP (Model Context Protocol)** 接入联网搜索，并通过百度地图官方 API 接入地理位置服务。
+- **会话持久化**: 基于 Redis 实现分布式 Session 管理，支持多平台会话隔离。
 
 ### 2. 知识库后端 (`backend/knowledge`)
 专为技术文档设计的 RAG 引擎。
@@ -49,7 +73,20 @@ python scripts/start_dev.py
 - **语言**: Python 3.10+, JavaScript (Vue 3)
 - **AI 模型**: 阿里百炼通义千问系列 (Qwen-Max, Qwen-Flash)
 - **数据库**: MySQL (用户数据), Redis (会话数据), ChromaDB (向量数据)
+- **可观测性**: LangSmith (全链路追踪)
+- **评估框架**: Ragas (量化 RAG 效果)
 - **协议**: MCP (Model Context Protocol), SSE (Server-Sent Events)
+
+## 📊 评估与监控
+
+### 1. AI 可观测性 (LangSmith)
+系统集成了 LangSmith，通过在 `.env` 中配置 `LANGCHAIN_TRACING_V2=true`，可以实时追踪：
+- Agent 间的任务调度与交接过程。
+- 工具调用的输入输出参数。
+- 模型生成的 Token 消耗与响应耗时。
+
+### 2. 量化评估 (Ragas)
+在 `tests/evaluation/` 目录下提供了基于 Ragas 的评估脚本，支持对 Faithfulness、Relevance 等核心指标进行量化分析，确保知识库回答的准确性。
 
 ## 📂 目录说明
 

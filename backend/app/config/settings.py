@@ -58,7 +58,6 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379, description="Redis端口")
 
     # ==================== 外部服务配置 ====================
-    AMAP_API_KEY: Optional[str] = Field(default=None, description="高德地图 API Key")
     BAIDU_MAP_AK: Optional[str] = Field(default=None, description="百度地图 API AK")
 
     # 知识库服务
@@ -72,6 +71,12 @@ class Settings(BaseSettings):
         default=None,
         description="通义千问 DashScope Base URL"
     )
+
+    # ==================== LangChain / LangSmith 可观测性配置 ====================
+    LANGCHAIN_TRACING_V2: str = Field(default="false", description="是否开启 LangSmith 追踪")
+    LANGCHAIN_ENDPOINT: Optional[str] = Field(default="https://api.smith.langchain.com", description="LangSmith 端点")
+    LANGCHAIN_API_KEY: Optional[str] = Field(default=None, description="LangSmith API Key")
+    LANGCHAIN_PROJECT: Optional[str] = Field(default="its-multi-agent", description="LangSmith 项目名称")
 
     # ==================== Pydantic Settings 配置 ====================
 
@@ -111,4 +116,15 @@ class Settings(BaseSettings):
 
 # 创建全局配置实例
 settings = Settings()
+
+# 将 LangSmith 相关的配置应用到环境变量中，供底层库使用
+if settings.LANGCHAIN_TRACING_V2.lower() == "true":
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    if settings.LANGCHAIN_ENDPOINT:
+        os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGCHAIN_ENDPOINT
+    if settings.LANGCHAIN_API_KEY:
+        os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
+    if settings.LANGCHAIN_PROJECT:
+        os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
+    print(f"LangSmith Tracing Enabled: Project={settings.LANGCHAIN_PROJECT}")
 

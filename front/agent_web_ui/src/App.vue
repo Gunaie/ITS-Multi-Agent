@@ -5,7 +5,10 @@
       <aside class="app-sidebar">
         <div class="logo-area">
           <div class="logo-box">ITS</div>
-          <span class="logo-text">智能客服平台</span>
+          <div class="logo-info">
+            <span class="logo-text">ITS 智能专家</span>
+            <span class="logo-desc">智能 3S 技术支持中心</span>
+          </div>
         </div>
         
         <el-button class="new-chat-btn" plain @click="handleNewChat">
@@ -357,9 +360,14 @@ body {
   margin-bottom: 30px;
 }
 
+.logo-info {
+  display: flex;
+  flex-direction: column;
+}
+
 .logo-box {
   width: 36px;
-  height: 36px;
+  height: 44px;
   background-color: var(--primary-blue);
   border-radius: 8px;
   display: flex;
@@ -374,6 +382,13 @@ body {
   font-size: 18px;
   font-weight: 700;
   color: var(--text-main);
+  line-height: 1.2;
+}
+
+.logo-desc {
+  font-size: 11px;
+  color: var(--text-sub);
+  margin-top: 2px;
 }
 
 .new-chat-btn {

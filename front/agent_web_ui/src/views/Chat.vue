@@ -3,20 +3,29 @@
     <div class="message-list" ref="messagesRef">
       <div v-if="messages.length === 0" class="welcome-screen">
         <div class="welcome-icon">🤖</div>
-        <h2>您好，有什么我可以帮您的吗？</h2>
-        <p>我是您的智能技术支持专家。您可以咨询技术故障排查，或者寻找附近的联想服务站。</p>
+        <h2>您好，我是您的 ITS 智能技术专家</h2>
+        <p>专业解决硬件故障诊断、软件操作指导及线下服务查询。<br/><strong>Solve (解决) • Step (步骤) • Service (服务)</strong></p>
         <div class="suggestions">
-          <div class="suggestion-card" @click="useSuggestion('电脑开机黑屏没反应怎么办？')">
-            <el-icon><Monitor /></el-icon>
-            <span>黑屏故障排查</span>
+          <div class="suggestion-card" @click="useSuggestion('电脑开机蓝屏提示 0x000007B 怎么办？')">
+            <el-icon><Warning /></el-icon>
+            <div class="sug-text">
+              <span class="sug-label">硬件排障</span>
+              <span class="sug-desc">蓝屏/黑屏/死机</span>
+            </div>
           </div>
-          <div class="suggestion-card" @click="useSuggestion('附近有哪些联想官方维修站？')">
+          <div class="suggestion-card" @click="useSuggestion('如何设置笔记本的电池充电阈值？')">
+            <el-icon><Setting /></el-icon>
+            <div class="sug-text">
+              <span class="sug-label">软件指导</span>
+              <span class="sug-desc">系统设置/软件安装</span>
+            </div>
+          </div>
+          <div class="suggestion-card" @click="useSuggestion('我在中关村，附近有哪些联想授权维修点？')">
             <el-icon><Location /></el-icon>
-            <span>寻找服务中心</span>
-          </div>
-          <div class="suggestion-card" @click="useSuggestion('如何使用 U 盘重装系统？')">
-            <el-icon><Download /></el-icon>
-            <span>系统安装指南</span>
+            <div class="sug-text">
+              <span class="sug-label">网点查询</span>
+              <span class="sug-desc">实时定位/网点电话</span>
+            </div>
           </div>
         </div>
       </div>
@@ -133,7 +142,7 @@
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { chatWithAgent, chatStreamWithAgent, getSessionDetail } from '@/api/app'
 import { marked } from 'marked'
-import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning } from '@element-plus/icons-vue'
+import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 // 配置 marked 渲染器，使链接在新标签页中打开
@@ -478,6 +487,24 @@ onMounted(() => {
   color: var(--text-main);
   font-size: 14px;
   box-shadow: var(--shadow-sm);
+  min-width: 200px;
+}
+
+.sug-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.sug-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.sug-desc {
+  font-size: 12px;
+  color: var(--text-sub);
+  margin-top: 2px;
 }
 
 .suggestion-card:hover {

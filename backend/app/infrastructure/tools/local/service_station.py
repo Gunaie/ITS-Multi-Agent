@@ -214,23 +214,20 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
     # 4. 计算路网距离 (仅针对 200km 以内的前 10 个站点)
     if all_pois:
         try:
-            from infrastructure.tools.local.baidu_map_tool import baidu_get_distance
+            from infrastructure.tools.local.baidu_map_tool import baidu_get_distances_batch
             # 先按直线距离粗筛前 10 个
             all_pois.sort(key=lambda x: x.get('distance', 999999))
             process_targets = all_pois[:10]
             
-            async def update_dist(poi):
-                dest = f"{poi.get('lat')},{poi.get('lng')}"
-                if poi.get('lat') and poi.get('lng'):
-                    road_dist = await baidu_get_distance(coords, dest)
-                    if road_dist is not None:
-                        poi['road_dist'] = road_dist
-                    else:
-                        poi['road_dist'] = round(poi.get('distance', 0) / 1000, 2)
-                else:
-                    poi['road_dist'] = 999
+            dest_coords_list = [f"{p.get('lat')},{p.get('lng')}" for p in process_targets]
+            road_distances = await baidu_get_distances_batch(coords, dest_coords_list)
             
-            await asyncio.gather(*[update_dist(p) for p in process_targets])
+            for i, p in enumerate(process_targets):
+                if i < len(road_distances) and road_distances[i] is not None:
+                    p['road_dist'] = road_distances[i]
+                else:
+                    p['road_dist'] = round(p.get('distance', 0) / 1000, 2)
+            
             # 对未处理的站点也补齐 road_dist 字段
             for p in all_pois[10:]:
                 p['road_dist'] = round(p.get('distance', 0) / 1000, 2)
@@ -415,19 +412,17 @@ async def query_nearest_repair_shops_by_coords(ctx: RunContextWrapper, coords: s
             if not top_3: return ""
             
             # 核心改进：尝试使用百度路网距离替换直线距离
-            from infrastructure.tools.local.baidu_map_tool import baidu_get_distance
+            from infrastructure.tools.local.baidu_map_tool import baidu_get_distances_batch
             
-            async def update_with_road_distance(station):
-                dest_coords = f"{station['lat']},{station['lng']}"
-                road_dist = await baidu_get_distance(coords, dest_coords)
-                if road_dist is not None:
-                    station['dist'] = road_dist
-                    station['is_road_dist'] = True
+            dest_coords_list = [f"{s['lat']},{s['lng']}" for s in top_3]
+            road_distances = await baidu_get_distances_batch(coords, dest_coords_list)
+            
+            for i, s in enumerate(top_3):
+                if i < len(road_distances) and road_distances[i] is not None:
+                    s['dist'] = road_distances[i]
+                    s['is_road_dist'] = True
                 else:
-                    station['is_road_dist'] = False
-            
-            # 并行计算 Top 3 的路网距离
-            await asyncio.gather(*[update_with_road_distance(s) for s in top_3])
+                    s['is_road_dist'] = False
             
             response = "### 系统为您找到距离较近的官方授权网点：\n\n"
             for s in top_3:

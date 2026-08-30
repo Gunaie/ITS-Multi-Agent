@@ -24,6 +24,7 @@ from common.infrastructure.auth.router import router as auth_router
 from common.infrastructure.auth.models import UserRepo
 from common.infrastructure.auth.deps import get_current_user
 from common.infrastructure.limiter import limiter
+from config.settings import settings
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -58,7 +59,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # 注册 Auth 路由
 app.include_router(auth_router)
 
-from infrastructure.tools.mcp.mcp_servers import search_mac_client, amap_map_mcp
+from infrastructure.tools.mcp.mcp_servers import search_mac_client
 from multi_agent.technical_agent import technical_agent
 from multi_agent.service_agent import comprehensive_service_agent
 
@@ -347,7 +348,7 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
             input=chat_request.question, 
             session=session,
             context=session,
-            run_config=RunConfig(tracing_disabled=True)
+            run_config=RunConfig(tracing_disabled=not (settings.LANGCHAIN_TRACING_V2.lower() == "true"))
         )
         logger.info("Agent Runner finished successfully")
         
@@ -417,7 +418,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 input=chat_request.question, 
                 session=session,
                 context=session,
-                run_config=RunConfig(tracing_disabled=True)
+                run_config=RunConfig(tracing_disabled=not (settings.LANGCHAIN_TRACING_V2.lower() == "true"))
             )
             
             full_reasoning = ""

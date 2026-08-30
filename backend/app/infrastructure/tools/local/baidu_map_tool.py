@@ -107,33 +107,48 @@ async def baidu_get_distance(origin: str, destination: str) -> Optional[float]:
     使用百度地图批量算路 API (Route Matrix) 计算驾车路网距离 (公里)
     origin/destination: "lat,lng"
     """
+    results = await baidu_get_distances_batch(origin, [destination])
+    return results[0] if results else None
+
+async def baidu_get_distances_batch(origin: str, destinations: List[str]) -> List[Optional[float]]:
+    """
+    批量计算路网距离
+    destinations: ["lat,lng", "lat,lng", ...]
+    """
     ak = settings.BAIDU_MAP_AK
-    if not ak:
-        return None
+    if not ak or not destinations:
+        return [None] * len(destinations)
     
     url = "https://api.map.baidu.com/routematrix/v2/driving"
+    # 百度 API 限制一次最多 50 个目的地
+    dest_str = "|".join(destinations[:50])
     params = {
         "ak": ak,
         "origins": origin,
-        "destinations": destination,
+        "destinations": dest_str,
         "output": "json"
     }
     
     try:
         client = get_baidu_client()
-        logger.info(f"Baidu Route Matrix request: {origin} -> {destination}")
+        logger.info(f"Baidu Route Matrix batch request for {len(destinations)} points")
         response = await client.get(url, params=params)
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == 0:
-                result = data.get("result", [])
-                if result and len(result) > 0:
-                    distance_m = result[0].get("distance", {}).get("value", 0)
-                    distance_km = round(distance_m / 1000, 2)
-                    logger.info(f"Baidu Route Matrix success: {distance_km} km")
-                    return distance_km
+                results = data.get("result", [])
+                distances = []
+                for res in results:
+                    dist_m = res.get("distance", {}).get("value")
+                    if dist_m is not None:
+                        distances.append(round(dist_m / 1000, 2))
+                    else:
+                        distances.append(None)
+                # 如果请求的 destinations 超过了 50 个，递归处理剩余的 (此处简单处理，仅取前 50)
+                return distances
             elif data.get("status") == 211:
                 logger.error("百度地图 API 错误 (211): APP SN校验失败。")
     except Exception as e:
-        logger.error(f"百度路网距离计算异常: {str(e)}")
-    return None
+        logger.error(f"百度批量距离计算异常: {str(e)}")
+    
+    return [None] * len(destinations)
