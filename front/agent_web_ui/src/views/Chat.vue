@@ -148,7 +148,7 @@
 
 <script setup>
 import { ref, nextTick, onMounted, watch } from 'vue'
-import { chatWithAgent, chatStreamWithAgent, getSessionDetail } from '@/api/app'
+import { chatWithAgent, chatStreamWithAgent, getSessionDetail, getLocationByIp, getLocationConfig } from '@/api/app'
 import { marked } from 'marked'
 import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning, Setting, Connection, Service } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -237,7 +237,7 @@ watch(() => props.sessionId, (newSid) => {
 
 const getUserLocation = (force = false) => {
   if (locationLoading.value) return
-  
+
   // 检查 sessionStorage 是否已有有效的经纬度 (包含逗号)
   const savedLocation = sessionStorage.getItem('its_user_location')
   if (!force && savedLocation && savedLocation.includes(',')) {
@@ -248,7 +248,7 @@ const getUserLocation = (force = false) => {
 
   if (navigator.geolocation) {
     locationLoading.value = true
-    
+
     navigator.geolocation.getCurrentPosition(
       (position) => {
         // 浏览器 Geolocation 返回 WGS-84 坐标，按定位契约携带前缀，后端自动转百度坐标系
@@ -259,15 +259,104 @@ const getUserLocation = (force = false) => {
         locationLoading.value = false
       },
       (error) => {
-        console.warn('Error getting location:', error.message)
-        locationLoading.value = false
-        // 定位失败不弹窗干扰，交给后端 IP 定位兜底
-        userLocation.value = null
-        sessionStorage.removeItem('its_user_location')
+        console.warn('Browser geolocation failed:', error.message)
+        // 大陆桌面浏览器 Geolocation 依赖 Google 定位服务,必然超时
+        // 降级链: 百度 JS API 浏览器定位 -> 后端 IP 定位 -> 手动设置
+        tryBaiduLocate()
+          .then(coords => {
+            userLocation.value = coords
+            sessionStorage.setItem('its_user_location', coords)
+            ElMessage.success('已通过百度定位获取位置(精度有限,可手动设置)')
+            locationLoading.value = false
+          })
+          .catch(() => {
+            getLocationByIp().then(res => {
+              if (res && res.located && res.coords) {
+                userLocation.value = res.coords
+                sessionStorage.setItem('its_user_location', res.coords)
+                ElMessage.info(`已通过网络IP定位${res.city ? ': ' + res.city : ''}（精度有限，可手动设置）`)
+              } else {
+                userLocation.value = null
+                sessionStorage.removeItem('its_user_location')
+              }
+            }).catch(() => {
+              userLocation.value = null
+              sessionStorage.removeItem('its_user_location')
+            }).finally(() => {
+              locationLoading.value = false
+            })
+          })
       },
-      { timeout: 5000, enableHighAccuracy: false }
+      { timeout: 3000, enableHighAccuracy: false }
     )
+  } else {
+    // 无 geolocation 能力直接走百度定位 -> IP 兜底
+    locationLoading.value = true
+    tryBaiduLocate()
+      .then(coords => {
+        userLocation.value = coords
+        sessionStorage.setItem('its_user_location', coords)
+        ElMessage.success('已通过百度定位获取位置')
+      })
+      .catch(() => {
+        userLocation.value = null
+      })
+      .finally(() => {
+        locationLoading.value = false
+      })
   }
+}
+
+// ---- 百度地图 JS API 浏览器定位 (国内可用,直接返回 BD-09 坐标) ----
+let _bmapLoaded = null
+const loadBaiduMapApi = () => {
+  if (window.BMapGL) return Promise.resolve(window.BMapGL)
+  if (_bmapLoaded) return _bmapLoaded
+  _bmapLoaded = getLocationConfig()
+    .then(res => {
+      const ak = res && res.bmap_ak
+      if (!ak) throw new Error('bmap_ak 未配置')
+      return new Promise((resolve, reject) => {
+        window.__bmapInitCallback = () => resolve(window.BMapGL)
+        const script = document.createElement('script')
+        script.src = `https://api.map.baidu.com/api?v=1.0&type=webgl&ak=${ak}&callback=__bmapInitCallback`
+        script.onerror = () => reject(new Error('百度地图 JS API 加载失败'))
+        document.head.appendChild(script)
+        setTimeout(() => reject(new Error('百度地图 JS API 加载超时')), 8000)
+      })
+    })
+    .catch(e => {
+      _bmapLoaded = null  // 失败后允许重试
+      throw e
+    })
+  return _bmapLoaded
+}
+
+const tryBaiduLocate = () => {
+  // 百度网络定位首次调用冷启动慢(探测IP/WiFi环境), 失败自动重试一次, 二调通常秒回
+  const attempt = () => new Promise((resolve, reject) => {
+    try {
+      const geo = new BMapGL.Geolocation()
+      let settled = false
+      const timer = setTimeout(() => {
+        if (!settled) { settled = true; reject(new Error('百度定位超时')) }
+      }, 15000)
+      geo.getCurrentPosition(position => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        // 百度 JS API 返回的坐标即为 BD-09,符合前端定位契约(默认 BD-09)
+        if (position && position.point && position.point.lat && position.point.lng) {
+          resolve(`${position.point.lat},${position.point.lng}`)
+        } else {
+          reject(new Error('百度定位失败: ' + (geo.getStatus ? geo.getStatus() : 'unknown')))
+        }
+      })
+    } catch (e) {
+      reject(e)
+    }
+  })
+  return attempt().catch(() => attempt())
 }
 
 const handleManualLocation = (customMsg) => {
@@ -443,6 +532,8 @@ const handleSend = async () => {
 onMounted(() => {
   // 页面加载时主动尝试获取一次位置
   getUserLocation()
+  // 预热: 提前加载百度地图 JS API(浏览器定位冷启动慢, 预加载让降级链秒级完成)
+  loadBaiduMapApi().catch(() => {})
 })
 </script>
 
@@ -816,7 +907,7 @@ onMounted(() => {
   cursor: wait;
 }
 
-.is-loading {
+.el-icon.is-loading {
   animation: rotating 2s linear infinite;
 }
 

@@ -16,6 +16,11 @@ ingestion_processor = IngestionProcessor()
 retrieval_service = RetrievalService()
 query_service = QueryService()
 
+
+@router.get("/health", summary="健康检查")
+async def health():
+    return {"status": "ok"}
+
 @router.post("/upload", response_model=UploadResponse, summary="处理知识库上传")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
@@ -30,6 +35,9 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
                 status_code=400,
                 detail=f"不支持的文件格式: {file_ext}，仅支持 {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             )
+
+        # 0.5 同名文档检测: 已存在同名文档则提示将覆盖更新(入库本身为幂等覆盖)
+        doc_exists = ingestion_processor.vector_store.title_exists(file.filename)
 
         # 1. 准备保存目录
         temp_md_dir = settings.TMP_MD_FOLDER_PATH
@@ -46,6 +54,13 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         # 这样 API 可以立即返回，不用等待耗时的向量化过程
         background_tasks.add_task(ingestion_processor.ingest_file, file_path)
 
+        if doc_exists:
+            return UploadResponse(
+                status="updated",
+                message=f"检测到同名文档「{file.filename}」已存在，本次上传将覆盖更新旧版本",
+                file_name=file.filename,
+                chunks_added=0
+            )
         return UploadResponse(
             status="success",
             message="文件上传成功，正在后台处理入库...",

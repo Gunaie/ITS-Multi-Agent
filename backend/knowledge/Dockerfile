@@ -30,5 +30,5 @@ COPY common/ ./common/
 # 暴露端口
 EXPOSE 8001
 
-# 启动命令
-CMD ["python", "api/main.py"]
+# 启动命令 (容器内必须绑定 0.0.0.0, 否则端口映射失效; 开发模式的 host=127.0.0.1+reload 不可用于容器)
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8001"]

@@ -443,6 +443,32 @@ def save_session(session_id: str, session: Session, user_id: str = None, app_typ
     except Exception as e:
         logger.error(f"Error saving session to redis: {e}")
 
+@app.get("/location/config")
+async def location_config(current_user: dict = Depends(get_current_user)):
+    """下发百度地图 JS API AK 供前端浏览器定位使用。
+    按百度新规,JS API 必须使用'浏览器端'类型 AK(BAIDU_MAP_AK_BROWSER);为空时前端跳过百度定位走 IP 兜底。"""
+    return {"bmap_ak": settings.BAIDU_MAP_AK_BROWSER or ""}
+
+
+@app.get("/location/ip")
+async def locate_by_ip(request: Request, current_user: dict = Depends(get_current_user)):
+    """
+    前端浏览器定位失败后的 IP 定位兜底。
+    大陆桌面浏览器 Geolocation 依赖 Google 定位服务(不可达)必然超时,
+    前端捕获失败后调此接口,用客户端公网 IP 经 ip-api.com 解析为 BD-09 坐标。
+    """
+    from infrastructure.tools.local.location_service import get_ip_location
+    client_ip = extract_client_ip(request)
+    try:
+        loc = await asyncio.wait_for(get_ip_location(client_ip), timeout=6.0)
+    except Exception as e:
+        logger.info(f"IP location endpoint failed: {e}")
+        loc = None
+    if not loc:
+        return {"located": False, "reason": "无法通过公网IP定位(内网访问或解析失败)"}
+    return {"located": True, "coords": loc.coords, "city": loc.display_name or ""}
+
+
 @app.get("/sessions")
 async def list_sessions(app_type: str = "agent", current_user: dict = Depends(get_current_user)):
     user_id = current_user['username'] # 使用用户名作为标识
@@ -525,6 +551,27 @@ async def update_session_title(session_id: str, request: SessionTitleUpdate, cur
         logger.error(f"Failed to update session title for {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"更新标题失败: {str(e)}")
 
+def build_orchestrator_input(session: Session, question: str) -> str:
+    """组装调度者输入: 原始问题 + 定位上下文摘要。
+    调度者模型的输入只有文本, 看不到 session.context, 若不注入会答"无法获取位置"
+    (而定位信息其实已随浏览器授权捕获)。服务分支有自己的动态注入, 此处仅注入调度者分支。"""
+    try:
+        ctx = session.context if isinstance(session.context, dict) else {}
+        record = ctx.get("location_record") if isinstance(ctx.get("location_record"), dict) else {}
+        coords = str(record.get("coords") or "").strip()
+        if coords:
+            display = str(record.get("display") or "").strip()
+            place = f"{display}附近" if display else "附近"
+            return (
+                f"{question}\n\n"
+                f"[系统上下文: 用户已通过浏览器授权定位, 当前位置约为 {coords} (BD-09坐标, {place}), "
+                f"定位方式为网络定位, 精度仅到城市/区级。若用户询问其当前位置, 请如实引用上述信息, "
+                f"并说明定位精度有限。严禁编造更精确的位置。]"
+            )
+    except Exception:
+        pass
+    return question
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, chat_request: ChatRequest, current_user: dict = Depends(get_current_user)):
     try:
@@ -559,7 +606,7 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         else:
             result = await Runner.run(
                 orchestrator_agent,
-                input=chat_request.question,
+                input=build_orchestrator_input(session, chat_request.question),
                 session=session,
                 context=session,
                 run_config=RunConfig(tracing_disabled=not (settings.LANGCHAIN_TRACING_V2.lower() == "true"))
@@ -638,7 +685,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 starting_agent = orchestrator_agent  # compound 和 other 都先走 orchestrator/technical
             stream = Runner.run_streamed(
                 starting_agent,
-                input=chat_request.question,
+                input=build_orchestrator_input(session, chat_request.question) if starting_agent is orchestrator_agent else chat_request.question,
                 session=session,
                 context=session,
                 run_config=RunConfig(tracing_disabled=not (settings.LANGCHAIN_TRACING_V2.lower() == "true"))

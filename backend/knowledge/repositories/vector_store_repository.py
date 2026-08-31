@@ -69,6 +69,15 @@ class VectorStoreRepository:
             logger.error(f"文档保存到向量数据库失败: {str(e)}")
             raise e
 
+    def title_exists(self, title: str) -> bool:
+        """检查指定标题的文档是否已入库(用于上传接口的同名文档提示)"""
+        try:
+            result = self.vector_database._collection.get(where={"title": title}, limit=1)
+            return bool(result and result.get("ids"))
+        except Exception as e:
+            logger.error(f"查询文档是否存在失败: {str(e)}")
+            return False
+
     def delete_by_title(self, title: str):
         """
         根据标题删除向量数据库中的相关文档块

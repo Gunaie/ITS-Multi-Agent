@@ -29,5 +29,5 @@ COPY common/ ./common/
 # 暴露端口
 EXPOSE 8002
 
-# 启动命令
-CMD ["python", "main.py"]
+# 启动命令 (uvicorn CLI, 容器内禁用开发模式的 reload)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
