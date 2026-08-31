@@ -22,18 +22,27 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     处理文件上传并异步入库
     """
     try:
-        # 0. 准备保存目录
+        # 0. 文件格式白名单校验
+        ALLOWED_EXTENSIONS = {'.md', '.pdf', '.docx', '.txt'}
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的文件格式: {file_ext}，仅支持 {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            )
+
+        # 1. 准备保存目录
         temp_md_dir = settings.TMP_MD_FOLDER_PATH
         os.makedirs(temp_md_dir, exist_ok=True)
         
         file_path = os.path.join(temp_md_dir, file.filename)
         
-        # 1. 保存上传文件到磁盘
+        # 2. 保存上传文件到磁盘
         async with aiofiles.open(file_path, 'wb') as out_file:
             while content := await file.read(1024 * 1024):
                 await out_file.write(content)
         
-        # 2. 注册后台任务进行入库处理
+        # 3. 注册后台任务进行入库处理
         # 这样 API 可以立即返回，不用等待耗时的向量化过程
         background_tasks.add_task(ingestion_processor.ingest_file, file_path)
 
@@ -44,6 +53,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
             chunks_added=0
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"文件上传失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")

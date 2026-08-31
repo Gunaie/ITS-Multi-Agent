@@ -3,14 +3,8 @@
     <div class="message-list" ref="messagesRef">
       <div v-if="messages.length === 0" class="welcome-screen">
         <div class="welcome-icon"><el-icon :size="48"><Service /></el-icon></div>
-        <h2>您好，我是您的 ITS 智能技术专家</h2>
-        <p>专业解决硬件故障诊断、软件操作指导及线下服务查询。<br/><strong>Solve (解决) • Step (步骤) • Service (服务)</strong></p>
-        <div class="feature-badges">
-          <div class="feature-badge"><el-icon><Warning /></el-icon><span>硬件排障</span></div>
-          <div class="feature-badge"><el-icon><Setting /></el-icon><span>软件指导</span></div>
-          <div class="feature-badge"><el-icon><Location /></el-icon><span>网点查询</span></div>
-          <div class="feature-badge"><el-icon><Connection /></el-icon><span>联网搜索</span></div>
-        </div>
+        <h2>您好，我是联想智能技术助手</h2>
+        <p>专业解决硬件故障诊断、软件操作指导及线下服务查询。<br/><strong>专业 • 高效 • 贴心</strong></p>
         <div class="suggestions">
           <div class="suggestion-card" @click="useSuggestion('电脑开机蓝屏提示 0x000007B 怎么办？')">
             <el-icon><Warning /></el-icon>
@@ -145,7 +139,7 @@
           </div>
         </div>
         <div class="input-footer">
-          ITS 多智能体平台 • 基于阿里云百炼 & ChromaDB
+          联想智能技术助手 · 售后技术支持与服务中心
         </div>
       </div>
     </div>
@@ -506,31 +500,6 @@ onMounted(() => {
   gap: 15px;
   flex-wrap: wrap;
   justify-content: center;
-}
-
-.feature-badges {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  justify-content: center;
-  margin: 16px 0 20px;
-}
-
-.feature-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border-radius: 20px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  font-size: 13px;
-  color: var(--text-sub);
-}
-
-.feature-badge .el-icon {
-  font-size: 15px;
-  color: var(--primary-blue, #3B82F6);
 }
 
 .suggestion-card {

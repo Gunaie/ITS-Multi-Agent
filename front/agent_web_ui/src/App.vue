@@ -4,10 +4,10 @@
       <!-- 左侧边栏 -->
       <aside class="app-sidebar">
         <div class="logo-area">
-          <div class="logo-box">ITS</div>
+          <div class="logo-box">联想</div>
           <div class="logo-info">
-            <span class="logo-text">ITS 智能专家</span>
-            <span class="logo-desc">智能 3S 技术支持中心</span>
+            <span class="logo-text">联想智能技术助手</span>
+            <span class="logo-desc">售后技术支持与服务中心</span>
           </div>
         </div>
         
@@ -85,7 +85,7 @@
         <header class="main-header">
           <div class="header-left">
             <el-icon><Menu /></el-icon>
-            <span class="breadcrumb">ITS 多智能体 / {{ currentSessionTitle }}</span>
+            <span class="breadcrumb">联想智能助手 / {{ currentSessionTitle }}</span>
           </div>
           <div class="user-profile">
             <el-dropdown v-if="isLoggedIn">
@@ -394,7 +394,8 @@ body {
   justify-content: center;
   color: white;
   font-weight: 800;
-  font-size: 14px;
+  font-size: 12px;
+  letter-spacing: 1px;
 }
 
 .logo-text {
