@@ -34,13 +34,17 @@ class Settings(BaseSettings):
 
     # ==================== 模型配置 ====================
 
-    MAIN_MODEL_NAME: Optional[str] = Field(
-        default="qwen3.8-27b",
-        description="主模型名称"
+    ORCHESTRATOR_MODEL_NAME: Optional[str] = Field(
+        default="qwen3.7-max-2026-06-08",
+        description="调度Agent(orchestrator)模型名称"
     )
-    SUB_MODEL_NAME: Optional[str] = Field(
-        default="qwen3.7-flash",
-        description="子模型名称"
+    TECHNICAL_MODEL_NAME: Optional[str] = Field(
+        default="glm-5.2",
+        description="技术专家(technical)模型名称"
+    )
+    SERVICE_MODEL_NAME: Optional[str] = Field(
+        default="deepseek-v4-flash-0731",
+        description="服务专家(service)模型名称"
     )
 
     # ==================== 数据库配置 ====================
@@ -58,7 +62,8 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379, description="Redis端口")
 
     # ==================== 外部服务配置 ====================
-    BAIDU_MAP_AK: Optional[str] = Field(default=None, description="百度地图 API AK")
+    BAIDU_MAP_AK: Optional[str] = Field(default=None, description="百度地图 API AK(服务端类型,geocode/Place等Web服务使用)")
+    BAIDU_MAP_AK_BROWSER: Optional[str] = Field(default=None, description="百度地图 AK(浏览器端类型,前端 JS API 浏览器定位专用)")
 
     # 知识库服务
     KNOWLEDGE_BASE_URL: Optional[str] = Field(

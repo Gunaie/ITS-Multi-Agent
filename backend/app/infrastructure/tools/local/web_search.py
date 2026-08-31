@@ -4,17 +4,18 @@ from config.settings import settings
 from common.infrastructure.logging.logger import logger
 
 @function_tool
-async def bailian_web_search(query: str) -> str:
+async def builtin_web_search(query: str) -> str:
     """
-    使用外部搜索服务获取最新的实时资讯、新闻、天气或股价等信息。
-    当用户询问的问题涉及“今天”、“最新”、“当前”或“此刻”的数据时，必须使用此工具。
-    
+    【降级兜底，能力有限】本地搜索工具：仅在主搜索工具 bailian_web_search 调用报错
+    或返回无效结果后才可使用。可能返回过时信息或占位提示，不保证实时性。
+
     Args:
         query: 搜索关键词
-        
+
     Returns:
-        str: 搜索到的结果摘要
+        str: 搜索结果摘要或降级提示
     """
+    logger.info(f"builtin_web_search(降级兜底) 被调用: {query}")
     # 模拟使用 DashScope 的搜索 API 或其他可用的搜索服务
     # 这里我们使用一个通用的搜索 API 逻辑
     api_key = settings.AL_BAILIAN_API_KEY

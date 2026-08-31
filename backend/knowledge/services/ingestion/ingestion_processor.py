@@ -41,24 +41,33 @@ class IngestionProcessor:
                         page_content=f"文档来源:{title}\n{chunk}",
                         metadata={"path": file_path, "title": title, "chunk_index": i}
                     ))
-            elif file_path.endswith(('.pdf', '.docx', '.doc', '.txt')):
-                # 使用 LangChain 的通用加载器
-                from langchain_community.document_loaders import UnstructuredFileLoader
-                loader = UnstructuredFileLoader(file_path)
+            elif file_path.endswith(('.pdf', '.docx', '.txt')):
+                # 轻量加载器 (无 torch/CUDA/opencv 依赖)
+                from langchain_community.document_loaders import (
+                    PyPDFLoader, Docx2txtLoader, TextLoader
+                )
+                if file_path.endswith('.pdf'):
+                    loader = PyPDFLoader(file_path)
+                elif file_path.endswith('.docx'):
+                    loader = Docx2txtLoader(file_path)
+                else:
+                    loader = TextLoader(file_path)
                 raw_docs = loader.load()
-                
-                # 切分通用文档
+
                 from langchain_text_splitters import RecursiveCharacterTextSplitter
                 splitter = RecursiveCharacterTextSplitter(
                     chunk_size=settings.CHUNK_SIZE,
                     chunk_overlap=settings.CHUNK_OVERLAP
                 )
                 chunks = splitter.split_documents(raw_docs)
-                
+
                 for i, chunk in enumerate(chunks):
                     chunk.page_content = f"文档来源:{title}\n{chunk.page_content}"
                     chunk.metadata.update({"path": file_path, "title": title, "chunk_index": i})
                     documents.append(chunk)
+            elif file_path.endswith('.doc'):
+                logger.warning(f"不支持 .doc 旧格式，请转换为 .docx 后再上传: {file_path}")
+                return 0
             else:
                 logger.warning(f"不支持的文件格式: {file_path}")
                 return 0

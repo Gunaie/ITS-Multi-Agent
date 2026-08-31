@@ -91,6 +91,22 @@ export function updateSessionTitle(sessionId, title) {
   })
 }
 
+export function getLocationByIp() {
+  return service({
+    url: '/location/ip',
+    method: 'get',
+    timeout: 8000
+  })
+}
+
+export function getLocationConfig() {
+  return service({
+    url: '/location/config',
+    method: 'get',
+    timeout: 8000
+  })
+}
+
 export function chatStreamWithAgent(data, onMessage, onDone, onError) {
   const controller = new AbortController();
   const signal = controller.signal;

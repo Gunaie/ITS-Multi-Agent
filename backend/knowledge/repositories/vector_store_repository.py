@@ -69,6 +69,15 @@ class VectorStoreRepository:
             logger.error(f"文档保存到向量数据库失败: {str(e)}")
             raise e
 
+    def title_exists(self, title: str) -> bool:
+        """检查指定标题的文档是否已入库(用于上传接口的同名文档提示)"""
+        try:
+            result = self.vector_database._collection.get(where={"title": title}, limit=1)
+            return bool(result and result.get("ids"))
+        except Exception as e:
+            logger.error(f"查询文档是否存在失败: {str(e)}")
+            return False
+
     def delete_by_title(self, title: str):
         """
         根据标题删除向量数据库中的相关文档块
@@ -107,7 +116,7 @@ class VectorStoreRepository:
         """
         return self.embedding.embed_documents(texts)
 
-    async def search_similarity_with_score(self, user_question: str, top_k: int = 5) -> List[tuple[Document, float]]:
+    async def search_similarity_with_score(self, user_question: str, top_k: int = 8) -> List[tuple[Document, float]]:
         """
          相似性检索带文档分数 (异步)
          分数（chroma向量数据库）：返回是L2距离得分（分数值越小越相似），不是余弦相似度的得分（分数余额高越相似） 距离得分：1-余弦相似度得分

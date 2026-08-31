@@ -5,22 +5,24 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from infrastructure.ai.prompt_loader import load_prompt
-from infrastructure.ai.openai_client import sub_model
+from infrastructure.ai.openai_client import technical_model
 from infrastructure.tools.local.knowledge_base import query_knowledge
-from infrastructure.tools.local.web_search import bailian_web_search
+from infrastructure.tools.local.web_search import builtin_web_search
 from infrastructure.tools.mcp.mcp_servers import search_mac_client
 from agents import Agent, ModelSettings
 from agents import Runner,RunConfig
 
 
 # 1. 定义技术智能体
+# 注意: MCP 注入后的联网搜索工具名同为 bailian_web_search（百炼侧命名），
+# 因此本地兜底工具必须用不同名称 builtin_web_search，避免工具表重名冲突。
 technical_agent = Agent(
     name="技术咨询专家",
     instructions=load_prompt("technical_agent"),
     handoff_description="专门处理硬件故障诊断、软件问题排查、系统安装建议以及实时新闻/资讯查询（如天气、股价、最新技术发布等）。当用户询问“怎么做”、“为什么”、“是什么”或涉及实时数据时，请交接给此专家。",
-    model=sub_model,
-    model_settings=ModelSettings(temperature=0),  # 不要发挥内容(软件层面限制模型的发挥)
-    tools=[query_knowledge, bailian_web_search],
+    model=technical_model,
+    model_settings=ModelSettings(temperature=0, extra_body={"tool_stream": True}),  # glm-5.2 流式工具调用必需 tool_stream
+    tools=[query_knowledge, builtin_web_search],
     # mcp_servers 将在运行时由调度者根据连接情况动态注入
 )
 

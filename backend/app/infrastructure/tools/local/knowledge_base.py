@@ -19,7 +19,8 @@ async def query_knowledge(question: str) -> str:
     payload = {"question": question}
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # 60s: 知识库 /query 包含 RAG 生成(LLM), 冷启动或生成慢时 30s 会超时
+        async with httpx.AsyncClient(timeout=60.0) as client:
             logger.info(f"Querying knowledge base at {url} with question: {question}")
             response = await client.post(url, json=payload)
             logger.info(f"Knowledge base response status: {response.status_code}")

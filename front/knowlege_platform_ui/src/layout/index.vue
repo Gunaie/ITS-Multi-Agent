@@ -1,7 +1,7 @@
 <template>
   <div class="app-wrapper">
     <div class="sidebar">
-      <div class="logo">ITS Knowledge</div>
+      <div class="logo">联想知识库管理</div>
       <el-menu
         :default-active="activeMenu"
         background-color="var(--sidebar-bg)"
@@ -147,7 +147,7 @@ const handleDelete = async (sid) => {
 }
 
 const handleGoToConsult = () => {
-  window.open('http://localhost:3002', '_blank')
+  window.open('http://localhost', '_blank')
 }
 
 const fetchSessionList = async () => {

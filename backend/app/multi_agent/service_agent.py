@@ -7,8 +7,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import set_tracing_disabled
 
 set_tracing_disabled(True)
-from agents import Agent, ModelSettings
-from infrastructure.ai.openai_client import sub_model
+from agents import Agent, ModelSettings, RunContextWrapper
+from infrastructure.ai.openai_client import service_model
 from infrastructure.tools.local.service_station import (
     get_nearby_official_repair_stations,
     map_uri
@@ -18,12 +18,55 @@ from infrastructure.tools.local.service_station import (
 
 from infrastructure.ai.prompt_loader import load_prompt
 
+# 基础提示词（静态部分）
+_BASE_SERVICE_PROMPT = load_prompt("comprehensive_service_agent")
+
+
+async def _service_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
+    """动态指令：将会话中已捕获的定位线索注入系统提示词末尾。
+
+    背景: temperature=0 下, 若历史中存在"追问城市"的助手回复, 模型在收到用户补充地点后
+    容易复读追问文案而不调用工具。系统提示词末尾的确定性指令能有效压过这种历史模仿。
+    """
+    prompt = _BASE_SERVICE_PROMPT
+    try:
+        session = getattr(ctx, "context", None)
+        ctx_dict = {}
+        if session is not None:
+            raw = getattr(session, "context", None)
+            if isinstance(raw, dict):
+                ctx_dict = raw
+        pending = str(ctx_dict.get("location_hint_pending") or "").strip()
+        record = ctx_dict.get("location_record") if isinstance(ctx_dict.get("location_record"), dict) else {}
+        coords = str(record.get("coords") or "").strip()
+        if pending:
+            prompt += (
+                "\n\n## ⚡ 系统上下文注入（本轮最高优先级，覆盖历史对话）\n"
+                f"系统已从会话中捕获到用户提供的地点：「{pending}」。\n"
+                "你必须**立即调用** get_nearby_official_repair_stations，"
+                f"并将参数 location_hint 填为 \"{pending}\"。\n"
+                "**严禁**再次追问城市，**严禁**重复历史中的任何追问文案——用户已经提供地点了。"
+            )
+        elif coords:
+            prompt += (
+                "\n\n## ⚡ 系统上下文注入（本轮最高优先级，覆盖历史对话）\n"
+                f"系统已持有用户定位坐标（{coords}）。\n"
+                "你必须**立即调用** get_nearby_official_repair_stations。\n"
+                "注意：若用户本轮话语中明确提到了具体地点（如学校/小区/街道名），"
+                "**必须**将该地点填入 location_hint 参数（文本地点优先于系统缓存坐标）；"
+                "仅在用户未提任何地点时才传空字符串。**严禁**追问城市。"
+            )
+    except Exception:
+        # 注入失败不影响基础提示词
+        pass
+    return prompt
+
 # 16. 定义服务智能体
 comprehensive_service_agent = Agent(
     name="业务服务专家",
-    instructions=load_prompt("comprehensive_service_agent"),
+    instructions=_service_instructions,
     handoff_description="专门处理维修站查询、地理位置定位、周边服务点搜索以及地图导航指引。当用户询问“哪里有”、“怎么去”或涉及地点、服务网网点时，请交接给此专家。",
-    model=sub_model,
+    model=service_model,
     model_settings=ModelSettings(
         temperature=0,
         max_tokens=2048,

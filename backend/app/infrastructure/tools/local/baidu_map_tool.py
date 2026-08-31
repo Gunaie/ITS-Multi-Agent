@@ -46,16 +46,26 @@ async def baidu_geocode(address: str) -> str:
             elif data.get("status") == 211:
                 logger.error("百度地图 API 错误 (211): APP SN校验失败。请在百度地图控制台将该 AK 的校验方式改为“IP白名单”或“无校验”，或者提供 SK 密钥。")
                 return ""
+            elif data.get("status") == 302:
+                logger.error(f"百度地图 API 错误 (status=302): 天配额超限。免费 AK 日配额约百余次，已超限。")
+                return ""
             else:
                 logger.warning(f"Baidu Geocoding API error: status={data.get('status')}, msg={data.get('msg')}")
     except Exception as e:
         logger.error(f"百度地理编码异常: {str(e)}")
     return ""
 
-async def baidu_around_search(coords: str, keywords: str, radius: int = 50000) -> List[Dict[str, Any]]:
+async def baidu_around_search(
+    coords: str,
+    keywords: str,
+    radius: int = 50000,
+    page_size: int = 20,
+) -> List[Dict[str, Any]]:
     """
     使用百度地图地点检索 API 查询 POI (周边搜索)
-    coords: "lat,lng"
+    coords: "lat,lng" (BD-09)
+    radius: 搜索半径（米），与展示口径保持一致
+    page_size: 单页结果数（百度上限 20）
     """
     ak = settings.BAIDU_MAP_AK
     if not ak:
@@ -68,13 +78,13 @@ async def baidu_around_search(coords: str, keywords: str, radius: int = 50000) -
         "location": coords, 
         "radius": radius,
         "output": "json",
-        "page_size": 10,
+        "page_size": min(page_size, 20),
         "scope": 2
     }
     
     try:
         client = get_baidu_client()
-        logger.info(f"Baidu Place Search request at {coords} for: {keywords}")
+        logger.info(f"Baidu Place Search request at {coords} for: {keywords} (radius={radius}m)")
         response = await client.get(url, params=params)
         if response.status_code == 200:
             data = response.json()
@@ -83,21 +93,29 @@ async def baidu_around_search(coords: str, keywords: str, radius: int = 50000) -
                 formatted_pois = []
                 for poi in pois:
                     location = poi.get("location", {})
+                    # distance 兼容两种返回位置：scope=2+location 时在 POI 顶层，
+                    # 部分版本在 detail_info 内；都取不到时置 None（由调用方现算直线距离）
+                    distance = poi.get("distance")
+                    if distance is None:
+                        distance = poi.get("detail_info", {}).get("distance")
                     formatted_pois.append({
                         "name": poi.get("name"),
                         "address": poi.get("address"),
                         "tel": poi.get("telephone"),
                         "lat": location.get("lat"),
                         "lng": location.get("lng"),
-                        "distance": poi.get("detail_info", {}).get("distance", 0)
+                        "distance": float(distance) if distance is not None else None
                     })
                 logger.info(f"Baidu Place Search found {len(formatted_pois)} POIs")
                 return formatted_pois
             elif data.get("status") == 211:
                 logger.error("百度地图 API 错误 (211): APP SN校验失败。请在百度地图控制台将该 AK 的校验方式改为“IP白名单”或“无校验”，或者提供 SK 密钥。")
                 return []
+            elif data.get("status") == 302:
+                logger.error(f"百度地图 API 错误 (status=302): {data.get('message', '天配额超限')}。免费 AK 日配额约百余次，已超限。service_agent 将退化到本地 DB 兜底查询。")
+                return []
             else:
-                logger.warning(f"Baidu Place Search API error: status={data.get('status')}, msg={data.get('message')}")
+                logger.warning(f"百度 Place Search API error: status={data.get('status')}, msg={data.get('message')}")
     except Exception as e:
         logger.error(f"百度周边搜索异常: {str(e)}")
     return []

@@ -2,7 +2,7 @@
   <div class="knowledge-container">
     <div class="page-header">
       <h2>知识库管理</h2>
-      <p class="subtitle">Upload and manage your knowledge base documents</p>
+      <p class="subtitle">上传和管理知识库文档</p>
     </div>
 
     <el-card class="upload-card">
@@ -19,14 +19,15 @@
           :http-request="handleUpload"
           multiple
           :show-file-list="false"
+          accept=".txt,.md,.pdf,.docx"
         >
           <el-icon class="el-icon--upload"><upload-filled /></el-icon>
           <div class="el-upload__text">
-            Drop file here or <em>click to upload</em>
+            将文件拖到此处，或<em>点击上传</em>
           </div>
           <template #tip>
             <div class="el-upload__tip">
-              Supported files: .txt, .md, .pdf (if supported by backend)
+              支持格式：.txt、.md、.pdf、.docx
             </div>
           </template>
         </el-upload>
@@ -74,16 +75,16 @@ const handleUpload = async (options) => {
       message: res.message,
       time: new Date().toLocaleString()
     })
-    ElMessage.success(`File ${file.name} uploaded successfully`)
+    ElMessage.success(`${file.name} 上传成功`)
   } catch (error) {
     uploadHistory.value.unshift({
       fileName: file.name,
       chunks: 0,
       status: 'error',
-      message: error.message || 'Upload failed',
+      message: error.message || '上传失败',
       time: new Date().toLocaleString()
     })
-    ElMessage.error(`Upload failed for ${file.name}`)
+    ElMessage.error(`${file.name} 上传失败`)
   }
 }
 

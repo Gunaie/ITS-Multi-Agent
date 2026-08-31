@@ -4,10 +4,10 @@
       <!-- 左侧边栏 -->
       <aside class="app-sidebar">
         <div class="logo-area">
-          <div class="logo-box">ITS</div>
+          <div class="logo-box">联想</div>
           <div class="logo-info">
-            <span class="logo-text">ITS 智能专家</span>
-            <span class="logo-desc">智能 3S 技术支持中心</span>
+            <span class="logo-text">联想智能技术助手</span>
+            <span class="logo-desc">售后技术支持与服务中心</span>
           </div>
         </div>
         
@@ -18,15 +18,23 @@
         </el-button>
         
         <nav class="sidebar-menu">
-          <div class="menu-item" :class="{ active: currentPath === '/chat' }" @click="currentPath = '/chat'">
+          <button class="menu-item" type="button" :class="{ active: currentPath === '/chat' && !pendingQuestion }" @click="goSmartConsult">
             <el-icon><ChatDotRound /></el-icon>
             <span>智能咨询</span>
-          </div>
-          <div class="menu-item" @click="handleGoToKnowledge">
+          </button>
+          <button class="menu-item" type="button" @click="goServiceStation">
+            <el-icon><Location /></el-icon>
+            <span>服务站查询</span>
+          </button>
+          <button class="menu-item" type="button" @click="goWebSearch">
+            <el-icon><Connection /></el-icon>
+            <span>联网搜索</span>
+          </button>
+          <button class="menu-item" type="button" @click="handleGoToKnowledge">
             <el-icon><Management /></el-icon>
             <span>知识库管理</span>
             <el-icon class="external-icon"><TopRight /></el-icon>
-          </div>
+          </button>
         </nav>
         
         <div class="sidebar-footer">
@@ -77,11 +85,11 @@
         <header class="main-header">
           <div class="header-left">
             <el-icon><Menu /></el-icon>
-            <span class="breadcrumb">ITS 多智能体 / {{ currentSessionTitle }}</span>
+            <span class="breadcrumb">联想智能助手 / {{ currentSessionTitle }}</span>
           </div>
           <div class="user-profile">
             <el-dropdown v-if="isLoggedIn">
-              <el-avatar :size="32" src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" />
+              <el-avatar :size="32" :icon="UserFilled" />
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item @click="handleLogout">退出登录</el-dropdown-item>
@@ -93,7 +101,7 @@
         </header>
         
         <div class="chat-content-container">
-          <Chat v-if="isLoggedIn && currentPath === '/chat'" :session-id="currentSessionId" @session-updated="fetchSessionList" />
+          <Chat v-if="isLoggedIn && currentPath === '/chat'" :session-id="currentSessionId" :pending-question="pendingQuestion" @session-updated="fetchSessionList" @clear-pending="pendingQuestion = ''" />
           <div v-else-if="isLoggedIn && currentPath === '/knowledge'" class="knowledge-placeholder">
             <el-empty description="知识库管理功能正在集成中..." />
           </div>
@@ -122,7 +130,7 @@
           </el-form-item>
           <div class="auth-actions">
             <el-button type="primary" class="auth-btn" :loading="authLoading" @click="handleAuth">
-              {{ isRegister ? '注 册' : '登 录' }}
+              {{ isRegister ? '注册' : '登录' }}
             </el-button>
             <div class="auth-switch" @click="isRegister = !isRegister">
               {{ isRegister ? '已有账号？去登录' : '没有账号？去注册' }}
@@ -137,7 +145,7 @@
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
 import Chat from './views/Chat.vue'
-import { Plus, ChatDotRound, Management, Location, Connection, Menu, ChatLineRound, TopRight, Edit, Delete } from '@element-plus/icons-vue'
+import { Plus, ChatDotRound, Management, Location, Connection, Menu, ChatLineRound, TopRight, Edit, Delete, UserFilled } from '@element-plus/icons-vue'
 import { login, register, getSessions, deleteSession, updateSessionTitle } from '@/api/app'
 import { ElMessage } from 'element-plus'
 
@@ -153,6 +161,22 @@ const authForm = ref({
 const currentPath = ref('/chat')
 const currentSessionId = ref(Math.random().toString(36).substring(7))
 const sessionList = ref([])
+const pendingQuestion = ref('')
+
+const goSmartConsult = () => {
+  pendingQuestion.value = ''
+  currentPath.value = '/chat'
+}
+
+const goServiceStation = () => {
+  pendingQuestion.value = '我在附近，请帮我找联想授权维修点'
+  currentPath.value = '/chat'
+}
+
+const goWebSearch = () => {
+  pendingQuestion.value = '今天有什么科技新闻？'
+  currentPath.value = '/chat'
+}
 
 // 编辑标题相关
 const editingId = ref(null)
@@ -230,7 +254,8 @@ const handleSessionClick = (sid) => {
 }
 
 const handleGoToKnowledge = () => {
-  window.open('http://localhost:3000', '_blank')
+  const { protocol, hostname } = window.location
+  window.open(`${protocol}//${hostname}:81`, '_blank')
 }
 
 const handleAuth = async () => {
@@ -244,19 +269,13 @@ const handleAuth = async () => {
     if (isRegister.value) {
       await register(authForm.value.username, authForm.value.password)
       ElMessage.success('注册成功，正在为您自动登录...')
-      // 注册成功后自动登录
-      const res = await login(authForm.value.username, authForm.value.password)
-      localStorage.setItem('token', res.access_token)
-      isLoggedIn.value = true
-      showLogin.value = false
-      ElMessage.success('登录成功')
-    } else {
-      const res = await login(authForm.value.username, authForm.value.password)
-      localStorage.setItem('token', res.access_token)
-      isLoggedIn.value = true
-      showLogin.value = false
-      ElMessage.success('登录成功')
     }
+    const res = await login(authForm.value.username, authForm.value.password)
+    localStorage.setItem('token', res.access_token)
+    isLoggedIn.value = true
+    showLogin.value = false
+    ElMessage.success('登录成功')
+    await fetchSessionList()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '操作失败')
   } finally {
@@ -375,7 +394,8 @@ body {
   justify-content: center;
   color: white;
   font-weight: 800;
-  font-size: 14px;
+  font-size: 12px;
+  letter-spacing: 1px;
 }
 
 .logo-text {
@@ -442,6 +462,11 @@ body {
   transition: all 0.2s;
   font-size: 14px;
   font-weight: 500;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
 }
 
 .menu-item:hover {
