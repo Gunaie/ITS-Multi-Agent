@@ -6,7 +6,8 @@ langchain-community
 langchain-text-splitters
 langchain-openai
 chromadb
-unstructured[all-docs]
+pypdf
+docx2txt
 python-magic
 python-dotenv
 pydantic-settings

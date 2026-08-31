@@ -2,9 +2,15 @@
   <div class="chat-main-view">
     <div class="message-list" ref="messagesRef">
       <div v-if="messages.length === 0" class="welcome-screen">
-        <div class="welcome-icon">🤖</div>
+        <div class="welcome-icon"><el-icon :size="48"><Service /></el-icon></div>
         <h2>您好，我是您的 ITS 智能技术专家</h2>
         <p>专业解决硬件故障诊断、软件操作指导及线下服务查询。<br/><strong>Solve (解决) • Step (步骤) • Service (服务)</strong></p>
+        <div class="feature-badges">
+          <div class="feature-badge"><el-icon><Warning /></el-icon><span>硬件排障</span></div>
+          <div class="feature-badge"><el-icon><Setting /></el-icon><span>软件指导</span></div>
+          <div class="feature-badge"><el-icon><Location /></el-icon><span>网点查询</span></div>
+          <div class="feature-badge"><el-icon><Connection /></el-icon><span>联网搜索</span></div>
+        </div>
         <div class="suggestions">
           <div class="suggestion-card" @click="useSuggestion('电脑开机蓝屏提示 0x000007B 怎么办？')">
             <el-icon><Warning /></el-icon>
@@ -25,6 +31,13 @@
             <div class="sug-text">
               <span class="sug-label">网点查询</span>
               <span class="sug-desc">实时定位/网点电话</span>
+            </div>
+          </div>
+          <div class="suggestion-card" @click="useSuggestion('今天有什么科技新闻？')">
+            <el-icon><Connection /></el-icon>
+            <div class="sug-text">
+              <span class="sug-label">联网搜索</span>
+              <span class="sug-desc">实时资讯/热点</span>
             </div>
           </div>
         </div>
@@ -98,6 +111,7 @@
       <div class="input-box-wrapper">
         <div class="input-box">
           <el-input
+            ref="inputRef"
             v-model="userInput"
             placeholder="请输入您的问题... (Shift + Enter 换行)"
             type="textarea"
@@ -142,7 +156,7 @@
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { chatWithAgent, chatStreamWithAgent, getSessionDetail } from '@/api/app'
 import { marked } from 'marked'
-import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning, Setting } from '@element-plus/icons-vue'
+import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning, Setting, Connection, Service } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 // 配置 marked 渲染器，使链接在新标签页中打开
@@ -157,17 +171,32 @@ const props = defineProps({
   sessionId: {
     type: String,
     required: true
+  },
+  pendingQuestion: {
+    type: String,
+    default: ''
   }
 })
 
-const emit = defineEmits(['session-updated'])
+const emit = defineEmits(['session-updated', 'clear-pending'])
 
 const userInput = ref('')
 const loading = ref(false)
 const locationLoading = ref(false)
 const messages = ref([])
 const messagesRef = ref(null)
+const inputRef = ref(null)
 const userLocation = ref(null)
+
+watch(() => props.pendingQuestion, (v) => {
+  if (v) {
+    userInput.value = v
+    nextTick(() => {
+      inputRef.value?.focus?.()
+    })
+    setTimeout(() => emit('clear-pending'), 0)
+  }
+})
 
 const loadSession = async (sid) => {
   if (!sid) return
@@ -228,7 +257,8 @@ const getUserLocation = (force = false) => {
     
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const coords = `${position.coords.latitude},${position.coords.longitude}`
+        // 浏览器 Geolocation 返回 WGS-84 坐标，按定位契约携带前缀，后端自动转百度坐标系
+        const coords = `wgs84:${position.coords.latitude},${position.coords.longitude}`
         userLocation.value = coords
         sessionStorage.setItem('its_user_location', coords)
         ElMessage.success('位置获取成功')
@@ -279,7 +309,9 @@ const formatContent = (text) => {
 
 const useSuggestion = (text) => {
   userInput.value = text
-  handleSend()
+  nextTick(() => {
+    inputRef.value?.focus?.()
+  })
 }
 
 const handleSend = async () => {
@@ -298,7 +330,9 @@ const handleSend = async () => {
     await new Promise((resolve) => {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          userLocation.value = `${position.coords.latitude},${position.coords.longitude}`
+          // WGS-84 坐标 + 前缀契约
+          userLocation.value = `wgs84:${position.coords.latitude},${position.coords.longitude}`
+          sessionStorage.setItem('its_user_location', userLocation.value)
           console.log('User location acquired:', userLocation.value)
           resolve()
         },
@@ -447,8 +481,8 @@ onMounted(() => {
 }
 
 .welcome-icon {
-  font-size: 60px;
   margin-bottom: 20px;
+  color: #3B82F6;
   filter: drop-shadow(0 4px 10px rgba(59, 130, 246, 0.2));
 }
 
@@ -472,6 +506,31 @@ onMounted(() => {
   gap: 15px;
   flex-wrap: wrap;
   justify-content: center;
+}
+
+.feature-badges {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 16px 0 20px;
+}
+
+.feature-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+.feature-badge .el-icon {
+  font-size: 15px;
+  color: var(--primary-blue, #3B82F6);
 }
 
 .suggestion-card {

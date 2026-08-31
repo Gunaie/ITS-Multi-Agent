@@ -1,0 +1,10 @@
+.venv
+chroma_kb1
+data
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.env
+*.log
