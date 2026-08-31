@@ -1,6 +1,6 @@
-# ITS 多智能体技术支持系统 (ITS Multi-Agent)
+# 联想售后智能技术支持系统 (Lenovo Multi-Agent Support)
 
-基于多智能体协作架构与 RAG（检索增强生成）技术的智能技术支持系统，旨在通过分工明确的 AI 专家团，为用户提供精准的硬件故障诊断、软件操作指导及周边服务查询。
+面向联想品牌产品（ThinkPad / 小新 / YOGA / ThinkCentre 等）的售后技术支持智能客服系统。基于多智能体协作架构与 RAG（检索增强生成）技术，通过分工明确的 AI 专家团队，为用户提供精准的硬件故障诊断、软件操作指导、附近官方维修网点查询及联网实时资讯问答。
 
 ## 🚀 快速启动
 
@@ -24,11 +24,12 @@ python scripts/start_dev.py
 # 1. 克隆项目
 git clone <repo-url> && cd its_multi_agent
 
-# 2. 配置环境变量（填入百炼 API Key 和百度地图 AK）
+# 2. 配置环境变量（填入百炼 API Key 和百度地图双 AK）
 cp .env.example .env
 #   编辑 .env，至少配置：
-#   AL_BAILIAN_API_KEY=your_key
-#   BAIDU_MAP_AK=your_ak
+#   AL_BAILIAN_API_KEY=your_key            # 阿里云百炼 Key（三模型 + embedding）
+#   BAIDU_MAP_AK=your_server_ak            # 百度地图"服务端"AK（地理编码/POI检索/路网距离）
+#   BAIDU_MAP_AK_BROWSER=your_browser_ak   # 百度地图"浏览器端"AK（前端 JS API 浏览器定位）
 
 # 3. 一键启动（首次会自动构建镜像）
 docker-compose up -d
@@ -111,8 +112,8 @@ graph TD
 
 ### 1. 应用后端 (`backend/app`)
 作为系统的“大脑”与“神经中枢”，负责 Agent 编排与业务逻辑。
-- **智能调度专家 (Orchestrator)**: 基于意图识别，将任务分发给技术或服务专家。
-- **多智能体协作**: 采用多智能体协作架构，支持 Agent 间的任务交接（Handoff）。
+- **智能调度专家 (Orchestrator)**: 意图网关三分支编排——纯服务诉求（短句+服务关键词）直连业务服务专家；复合意图（技术+服务）先技术后服务合并回答；技术/闲聊类经调度专家路由，支持 Agent 间任务交接（Handoff）。
+- **三模型分工**: 调度=qwen3.7-max、技术专家+知识库RAG生成=glm-5.2（启用 tool_stream 流式工具调用）、服务专家=deepseek-v4-flash，按角色择优分配。
 - **外部能力集成**: 通过 **MCP (Model Context Protocol)** 接入联网搜索，并通过百度地图官方 API 接入地理位置服务。
 - **会话持久化**: 基于 Redis 实现分布式 Session 管理，支持多平台会话隔离。
 
@@ -154,7 +155,7 @@ graph TD
 ## 🛠️ 技术栈
 
 - **语言**: Python 3.11+ (SSE 流式接口使用 asyncio.timeout), JavaScript (Vue 3)
-- **AI 模型**: 阿里百炼通义千问系列 (Qwen-Max, Qwen-Flash)
+- **AI 模型**: 三模型分工 (Qwen3.7-Max 调度 / GLM-5.2 技术专家+RAG生成 / DeepSeek-V4-Flash 服务专家) + text-embedding-v3 向量化，统一经阿里百炼 OpenAI 兼容接口接入
 - **数据库**: MySQL (用户数据 + 官方授权网点库), Redis (会话数据), ChromaDB (向量数据)
 - **可观测性**: LangSmith (全链路追踪)
 - **评估框架**: Ragas (量化 RAG 效果)
