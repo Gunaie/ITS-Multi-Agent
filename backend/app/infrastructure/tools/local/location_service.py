@@ -206,8 +206,90 @@ def parse_frontend_location(raw: str) -> Optional[str]:
     return f"{lat},{lng}"
 
 
+# geocode 精度为粗级别时结果不可信（如解析到城市/区县中心或无法归类）
+_GEO_COARSE_LEVELS = {"", "NoClass", "中国", "省份", "城市", "区县", "乡镇", "行政"}
+
+
+def _coords_drift_km(coords_a: str, coords_b: str) -> float:
+    """两组 "lat,lng" 坐标的近似距离（公里），用于漂移阈值判断"""
+    try:
+        lat1, lng1 = map(float, coords_a.split(","))
+        lat2, lng2 = map(float, coords_b.split(","))
+    except (ValueError, AttributeError):
+        return 999.0
+    dx = (lng2 - lng1) * 111.32 * max(math.cos(math.radians((lat1 + lat2) / 2)), 0.01)
+    dy = (lat2 - lat1) * 110.57
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def _seq_ratio(a: str, b: str) -> float:
+    from difflib import SequenceMatcher
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+async def _poi_search_top(address: str, city: str) -> Optional[tuple]:
+    """POI 名称检索:对"大学校区/同名分店"类地名比 geocode 更准。
+
+    返回 ("lat,lng", poi_name) 或 None。region 用提取到的城市约束，
+    无城市时用"全国"。从 top3 中选名称与地址文本最相似的一条，
+    相似度过低(<0.3)视为未命中，避免无关 POI 污染定位。
+    """
+    from config.settings import settings
+    from infrastructure.tools.local.baidu_map_tool import get_baidu_client
+
+    ak = settings.BAIDU_MAP_AK
+    if not ak:
+        return None
+    try:
+        client = get_baidu_client()
+        params = {
+            "ak": ak,
+            "query": address,
+            "region": city or "全国",
+            "output": "json",
+            "page_size": 3,
+            "scope": 1,
+        }
+        response = await client.get("https://api.map.baidu.com/place/v2/search", params=params)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        if data.get("status") != 0:
+            return None
+        best: Optional[tuple] = None
+        best_ratio = 0.0
+        for poi in (data.get("results") or [])[:3]:
+            loc = poi.get("location") or {}
+            lat, lng = loc.get("lat"), loc.get("lng")
+            if lat is None or lng is None:
+                continue
+            ratio = _seq_ratio(str(poi.get("name") or ""), address)
+            if ratio >= best_ratio:
+                best_ratio = ratio
+                best = (f"{lat},{lng}", str(poi.get("name") or ""))
+        if best and best_ratio < 0.3:
+            return None
+        return best
+    except Exception as e:
+        logger.warning(f"POI search fallback failed for {address!r}: {e}")
+        return None
+
+
 async def geocode_address(address: str) -> Optional[ResolvedLocation]:
-    """将用户提供的地点文本解析为 BD-09 坐标"""
+    """将用户提供的地点文本解析为 BD-09 坐标
+
+    策略: geocode 与 POI 名称检索并行,交叉校验。
+    背景: "湖北中医药大学黄家湖校区"这类含分校区/同名分店的地名,
+    不带 city 约束时 geocode 可能解析到同城另一校区(昙华林),导致周边
+    检索距离整体错误;而 POI 名称检索对这类地名更准。
+    决策:
+    - geocode 缺失 -> 用 POI
+    - geocode 为粗级别(NoClass/区县等) -> 优先 POI
+    - 两者漂移 > 3km -> 优先 POI(名称直接匹配,更可信)
+    - 其余 -> 用 geocode(门牌/道路类地址 geocode 更细)
+    """
     from config.settings import settings
     from infrastructure.tools.local.baidu_map_tool import get_baidu_client
 
@@ -227,18 +309,47 @@ async def geocode_address(address: str) -> Optional[ResolvedLocation]:
     try:
         client = get_baidu_client()
         logger.info(f"Geocoding location hint: {address}" + (f" (city={city})" if city else ""))
-        response = await client.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("status") == 0:
-                loc = data["result"]["location"]
-                return ResolvedLocation(
-                    coords=f"{loc['lat']},{loc['lng']}",
-                    source=LocationSource.USER_TEXT,
-                    display_name=address,
-                )
-            # 2: 参数无效 / 无法解析等，均为正常业务失败
-            logger.info(f"Baidu geocode miss for {address!r}: status={data.get('status')}")
+
+        async def _geo_task():
+            response = await client.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == 0:
+                    loc = data["result"]["location"]
+                    level = str(data["result"].get("level", "") or "")
+                    return f"{loc['lat']},{loc['lng']}", level
+                # 2: 参数无效 / 无法解析等，均为正常业务失败
+                logger.info(f"Baidu geocode miss for {address!r}: status={data.get('status')}")
+            return None
+
+        geo_res, poi_res = await asyncio.gather(_geo_task(), _poi_search_top(address, city))
+
+        coords: Optional[str] = None
+        chosen_by = ""
+        if geo_res:
+            coords, level = geo_res
+            chosen_by = f"geocode(level={level})"
+        if poi_res:
+            p_coords, p_name = poi_res
+            if coords is None:
+                coords, chosen_by = p_coords, f"poi({p_name})"
+            else:
+                drift = _coords_drift_km(coords, p_coords)
+                # 粗级别(NoClass/区县等)或与 POI 显著漂移时,信任 POI 名称检索
+                if level in _GEO_COARSE_LEVELS or drift > 3.0:
+                    logger.info(
+                        f"Geocode fallback to POI for {address!r}: "
+                        f"level={level!r}, drift={drift:.1f}km, poi={p_name!r}"
+                    )
+                    coords, chosen_by = p_coords, f"poi({p_name})"
+        if coords is None:
+            return None
+        logger.info(f"Location hint resolved by {chosen_by} -> {coords}")
+        return ResolvedLocation(
+            coords=coords,
+            source=LocationSource.USER_TEXT,
+            display_name=address,
+        )
     except Exception as e:
         logger.warning(f"Baidu geocode failed for {address!r}: {e}")
     return None

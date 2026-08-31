@@ -51,8 +51,10 @@ async def _service_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
             prompt += (
                 "\n\n## ⚡ 系统上下文注入（本轮最高优先级，覆盖历史对话）\n"
                 f"系统已持有用户定位坐标（{coords}）。\n"
-                "你必须**立即调用** get_nearby_official_repair_stations（location_hint 传空字符串）。\n"
-                "**严禁**追问城市。"
+                "你必须**立即调用** get_nearby_official_repair_stations。\n"
+                "注意：若用户本轮话语中明确提到了具体地点（如学校/小区/街道名），"
+                "**必须**将该地点填入 location_hint 参数（文本地点优先于系统缓存坐标）；"
+                "仅在用户未提任何地点时才传空字符串。**严禁**追问城市。"
             )
     except Exception:
         # 注入失败不影响基础提示词

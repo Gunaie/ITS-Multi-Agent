@@ -294,7 +294,7 @@ def apply_location_to_session(session: Session, request: Request, location: Opti
     - "gcj02:lat,lng"                 -> 高德/腾讯坐标，自动转 BD-09
     - "bd09:lat,lng"                  -> 百度坐标
     - 地址文本（如 "武汉光谷"）        -> location_hint_pending，由工具侧惰性 geocode
-    location 字段缺失时，尝试从问题文本中窄提取"我在X"式地点（同样写入 location_hint_pending）。
+    同时从问题文本中窄提取"我在X"式地点（写入 location_hint_pending，优先于前端粗定位）。
     同时捕获客户端 IP 供 IP 定位兜底使用。
     """
     session.context["client_ip"] = extract_client_ip(request)
@@ -308,12 +308,11 @@ def apply_location_to_session(session: Session, request: Request, location: Opti
                 "display": "",
                 "ts": _time.time(),
             }
-            # 新的 GPS 定位覆盖旧的待解析文本
-            session.context.pop("location_hint_pending", None)
         else:
             session.context["location_hint_pending"] = location.strip()
-        return
-    # location 字段缺失 -> 从问题文本窄提取（典型场景: 用户用一句话回答"您在哪个城市"的追问）
+    # 文本窄提取始终执行: 用户本轮话语中明说的地点（如"我在湖北工业大学"）
+    # 优先级高于前端粗定位（台式机浏览器定位实为 IP 定位，可能偏离数百公里）。
+    # 写入 location_hint_pending 后由工具侧按 hint > pending > 缓存 的顺序消费。
     m = _LOCATION_IN_TEXT_RE.search(question or "")
     if m and not m.group(1).startswith(_LOCATION_VERB_PREFIXES):
         session.context["location_hint_pending"] = m.group(1)

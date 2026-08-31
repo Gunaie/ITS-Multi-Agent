@@ -158,7 +158,7 @@ class RetrievalService:
             
             vector_docs, title_docs = await asyncio.gather(vector_task, title_task)
             
-            vector_docs = vector_docs[:5]
+            vector_docs = vector_docs[:8]
         except Exception as e:
             logger.error(f"多路检索发生错误: {e}")
             vector_docs = []
@@ -175,13 +175,21 @@ class RetrievalService:
         # 3. 粗排 (语义打分)
         try:
             # 限制候选数量以提升速度
-            rough_top_docs = await self._reranking(unique_docs[:15], user_question)
+            rough_top_docs = await self._reranking(unique_docs[:20], user_question)
         except Exception as e:
             logger.error(f"语义重排序失败: {e}")
             rough_top_docs = unique_docs[:10]
 
         # 4. 精排 (LLM 重排序已禁用以提升速度，直接返回语义排序 Top 4)
-        return rough_top_docs[:4]
+        # 同一文档（规范化 title 相同）只保留得分最高的一个 chunk，确保返回多文档覆盖
+        seen_titles = set()
+        final_docs = []
+        for doc in rough_top_docs:
+            norm_title = re.sub(r'^\d+-', '', doc.metadata.get('title', '')).replace('.md', '').strip()
+            if norm_title not in seen_titles:
+                seen_titles.add(norm_title)
+                final_docs.append(doc)
+        return final_docs[:4]
 
     async def _search_based_vector(self, user_question: str) -> List[Document]:
         """
@@ -242,6 +250,8 @@ class RetrievalService:
     def _deduplicate(self, total_candidates: List[Document]) -> List[Document]:
         """
          对合并后的文档列表去重
+         规范化 title（去掉数字前缀和 .md 后缀）后再比较，避免同一文档因
+         向量检索（title 带编号前缀）与标题检索（title 无前缀）两次返回
         """
         if not total_candidates:
             return []
@@ -256,8 +266,9 @@ class RetrievalService:
                 clean_content = parts[1].strip() if len(parts) > 1 else ""
             else:
                 clean_content = content.strip()
-            
-            key = (document.metadata['title'], clean_content[:100])
+
+            norm_title = re.sub(r'^\d+-', '', document.metadata.get('title', '')).replace('.md', '').strip()
+            key = (norm_title, clean_content[:100])
             if key not in seen:
                 seen.add(key)
                 unique_candidates.append(document)

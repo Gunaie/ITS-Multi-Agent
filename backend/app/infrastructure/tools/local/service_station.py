@@ -147,6 +147,7 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
     from infrastructure.tools.local.location_service import (
         resolve_user_location,
         LOCATION_REQUIRED_NOTICE,
+        LocationSource,
     )
     loc = await resolve_user_location(session, location_hint=location_hint)
     if loc is None:
@@ -300,15 +301,38 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
         if nearby_third:
             final_report += "\n\n".join(nearby_third[:3]) + "\n\n"
 
-    # 距离预警
-    min_dist = min((p.get('road_dist', 999) for p in all_pois), default=999)
-    if min_dist > 50 and not nearby_official:
+    # 距离与定位口径预警
+    # 注意: 不能用全部 POI 的最小距离判断——近处第三方店会掩盖"官方店全在百公里外"的事实
+    official_min_dist = min(
+        (p.get('road_dist', 999) for p in all_pois if p.get('is_official')),
+        default=999,
+    )
+    if official_min_dist > 50:
         loc_desc = loc.display_name or coords
-        final_report = f"⚠️ **位置提醒**：系统当前基于定位（{loc_desc}）进行搜索。若与您所在地不符，请直接告诉我您的城市或区域。\n\n" + final_report
+        final_report = (
+            f"⚠️ **位置提醒**：当前基于定位「{loc_desc}」搜索，最近的官方授权网点距此约 {official_min_dist:.0f} 公里。"
+            "若与您实际位置不符，请告诉我您的城市或区域，我将立即重新查询。\n\n" + final_report
+        )
+    # IP 兜底定位精度差（城市级甚至错位），必须显式告知口径，杜绝静默错位
+    if loc.source == LocationSource.IP_FALLBACK:
+        ip_desc = loc.display_name or "未知区域"
+        final_report = (
+            f"📍 **定位口径**：本轮由网络 IP 粗略定位（约「{ip_desc}」），精度有限；"
+            "直接告诉我您的详细位置（如学校/街道名）可获得更准确的结果。\n\n" + final_report
+        )
 
     if not all_pois:
         final_report = f"抱歉，在您的位置（{loc.display_name or coords}）附近 {SEARCH_RADIUS_KM}km 内暂时没有找到{brand}维修站。"
-        
+        return final_report
+
+    # 定位口径标注:告知用户距离基于哪个位置测算,便于发现定位偏差并主动纠正
+    base_loc = loc.display_name or coords
+    if loc.source == LocationSource.USER_TEXT:
+        final_report += (
+            f"\n\n💡 以上距离均基于您提供的位置「{base_loc}」测算。"
+            "如该位置与您实际所在地有偏差，请告诉我您的详细位置（如街道/门牌号），我将重新查询。"
+        )
+
     return final_report
 
 
