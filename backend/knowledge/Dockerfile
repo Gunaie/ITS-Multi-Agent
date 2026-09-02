@@ -1,11 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-# 使用清华镜像源加速 apt (Debian trixie)
-RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
-    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list 2>/dev/null; \
-    true
+# 注：清华 debian 镜像偶发 403，不做 apt 换源，使用官方 deb.debian.org
+# PyPI 安装阶段仍使用清华 pypi.tuna 加速。
 
 # 安装系统依赖 (极简: 仅 libmagic 用于文件类型检测, PDF/DOCX 解析走纯 Python)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,10 +14,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 复制依赖文件 (context 为 backend/, requirements 在 knowledge/ 下)
 COPY knowledge/requirements.txt .
 
-# 安装 Python 依赖 (清华 PyPI 镜像加速)
-RUN pip install --no-cache-dir -r requirements.txt \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --trusted-host pypi.tuna.tsinghua.edu.cn
+# 安装 Python 依赖（双源兜底：官方 PyPI + 阿里云镜像；今天清华 pypi.tuna 全站 403/versions none 不可用）
+RUN pip install \
+        --no-cache-dir \
+        --prefer-binary \
+        --timeout 120 \
+        --retries 3 \
+        --index-url https://pypi.org/simple/ \
+        --extra-index-url https://mirrors.aliyun.com/pypi/simple/ \
+        --trusted-host mirrors.aliyun.com \
+        -r requirements.txt
 
 # 复制知识库项目代码
 COPY knowledge/ .

@@ -1,11 +1,10 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-# 使用清华镜像源加速 apt
-RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
-    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list 2>/dev/null; \
-    true
+# 注：清华/国内 debian 镜像偶发 403 Forbidden，故此处不执行 sed 换源，
+# 直接使用官方 deb.debian.org（稳定可访问，只慢几秒）。
+# PyPI 安装阶段仍使用清华 pypi.tuna 加速，见下方 pip install。
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,10 +14,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 复制依赖文件 (context 为 backend/, requirements 在 app/ 下)
 COPY app/requirements.txt .
 
-# 安装 Python 依赖 (清华 PyPI 镜像加速)
-RUN pip install --no-cache-dir -r requirements.txt \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --trusted-host pypi.tuna.tsinghua.edu.cn
+# 安装 Python 依赖
+# 注：清华 pypi.tuna 今日出现 403 / versions: none 全站异常，
+# 故改为使用官方 PyPI 主源 + 阿里镜像作为额外索引（双源互为兜底），
+# 并显式开启超时/重试/优先二进制 wheel，避免构建因单点网络卡死。
+RUN pip install \
+        --no-cache-dir \
+        --prefer-binary \
+        --timeout 120 \
+        --retries 3 \
+        --index-url https://pypi.org/simple/ \
+        --extra-index-url https://mirrors.aliyun.com/pypi/simple/ \
+        --trusted-host mirrors.aliyun.com \
+        -r requirements.txt
 
 # 复制主后端项目代码
 COPY app/ .
