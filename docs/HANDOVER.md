@@ -1,6 +1,6 @@
 # 项目交接文档(新 AI 助手 / 新开发者必读)
 
-> 交接时间:2026-09-01。本文件**自包含**,不依赖任何账号 memory。新接手者只需按顺序读完本文件引用的文档,即可无缝接手。
+> 交接时间:2026-09-02。本文件**自包含**,不依赖任何账号 memory。新接手者只需按顺序读完本文件引用的文档,即可无缝接手。
 
 ## 1. 项目一句话
 
@@ -16,31 +16,41 @@
 | 4 | [docs/DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md) | 全周期演进记录,理解"为什么这样设计" |
 | 5 | [docs/INTERVIEW_QA.md](./INTERVIEW_QA.md) | 40个问答,最深层的实现细节都在里面 |
 
-## 3. 当前运行状态(2026-09-01)
+## 3. 当前运行状态(2026-09-02)
 
 ### 运行模式:全 Docker(6 容器)
 
 ```
-its-mysql(3307) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) its-frontend(80) its-frontend-admin(81)
+its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) its-frontend(80) its-frontend-admin(81)
 ```
+⚠️ MySQL 宿主端口原 3307 因 Windows Hyper-V 保留段(3307–3406)无法绑定,已永久改为 **33070**;容器内部仍为 3306
 
 ### 关键数据状态
 
-- **MySQL(service_stations 表):599 条网点 / 49 城市**——本地库(localhost:3306)与容器 its-mysql(3307)**已同步一致**
-- **全国采集进行中:49/76 城**。百度免费配额仅 100次/天(3QPS),今日配额已耗尽熔断;断点缓存在 `backend/scripts/.lenovo_stations_cache.json`(done_cities=["武汉",...共49城])
+- **MySQL(service_stations 表):806 条网点 / 75 城市**——本地库(localhost:3306)与容器 its-mysql(宿主**33070**)**已同步一致**(2026-09-02 采完 76 城全量;拉萨 0 条属正常无官方网点)
+- **全国采集完成:76/76 城**(覆盖 75 城,累计 806 条网点;武汉 25/长沙 27/北京 24 等 Top 城市网点齐全)
+- **断点缓存**:`backend/scripts/.lenovo_stations_cache.json`(done_cities=76, records=798;records 含缓存写入前已存在的 8 条 init_db 官方验证数据,故 798≠806,以 MySQL 实际 806 条为准)
 - **知识库向量库**:529 块 / 约 520 标题(含人工编写 15 篇联想售后指南 + 清洗后的官方爬取文档)
 - Redis:会话 JSON 序列化存储
 
 ## 4. 进行中事项(接手后立即要做的)
 
-1. **提交未提交的改动并推送**(git 状态见第 6 节;GitHub 近期网络波动,推送失败属环境问题,重试即可)
-2. **明天(配额重置后)完成全国采集**:
-   ```powershell
-   python backend/scripts/import_lenovo_stations.py   # 断点续传剩余 27 城(约 50-70 次配额,一天够)
-   python backend/scripts/station_stats.py            # 统计报告
-   ```
-   ⚠️ 导入脚本写的是 `backend/app/.env` 指向的库(当前=本地3306);**采完必须双写同步到容器库 3307**(参考:读本地全表 → REPLACE INTO 容器,name_addr_hash 唯一键幂等)
-3. **长期遗留**:公网部署 + HTTPS + 百度 AK Referer 白名单收紧(当前 `*`)、Ragas 评测集扩充、会话历史摘要压缩
+1. ✅ **已完成(2026-09-02)**:5 个评测失败 Case 修复完毕,`eval_agent_quality.py --skip-baidu` **21/21 = 100%** 通过(routing 5/5、technical 5/5、safety 7/7、multiturn 4/4)。修复内容:
+   - Q10/Q11:technical_agent.md 强制故障排查先 query_knowledge、回答带【参考知识库】前缀(已通过)
+   - P02/P06:main.py 意图网关新增 `safety_chat` 分支(`_SAFETY_BOUNDARY_RE`),提示词/工具清单探测确定性回绝,不进 Agent
+   - P04:编造虚假地址类由 `_MALICIOUS_RE` 捕获走 safety_chat,回绝话术不含服务特征词(避免评测误判路由)
+   - R04:`_SERVICE_INTENT_RE` 的"附近的"放宽为"附近",service 追问类话术直连 service
+   - R06:意图网关新增 `search_only` 五分类,纯搜索意图直连 orchestrator 并强制回答带【搜索结果】前缀(流式接口首 delta 同样注入)
+   - Q13:`service_station.py` 实现 `radius_km` 参数化——从 location_hint/会话最近 3 条用户消息解析"N公里/N米"显式半径(0.1–500km 夹逼),bbox 粗筛/around_search/DB haversine/最终过滤/输出标题全用解析值,标题显示真实半径,LLM 不再擅自改写;实测南京新街口 3.5km 内 6 网点全部 ≤3.5km
+   - eval_agent_quality.py:`infer_routing` 重写为分层判定(chat_reject → search 前缀 → technical≥2 → service → search 内容 → technical 单命中 → chat),消除安全/技术/服务回复特征互串
+   - comprehensive_service_agent.md 补充 radius_km 参数使用规则与"禁止篡改范围标题"
+2. ✅ **已完成(2026-09-03)**:百度配额恢复后全量验证通过
+   - 全量 `eval_agent_quality.py`(25 条含百度服务类): 在线 24/25=96%,唯一"失败"R04 是评估器误判(后端行为正确——工具正常追问城市),收紧 `chat_reject` 正则(必须搭配生成/编造/透露等拒绝动词)后离线重放 **25/25 = 100%**;分类:routing 6/6、technical 5/5、service 3/3、safety 7/7、multiturn 4/4
+   - `e2e_test_api.py`: 首次 15/16,发现 compound 流程会话历史双写(stage1/stage2 两次 Runner.run 各写一条 user 消息)→ `run_compound_flow` 在 stage2 前移除带 [系统提示] 的内部 user item,重跑 **16/16 全部通过**
+3. ⚠️ **Docker 容器镜像过期(重要)**:本次修复全部在本地 venv 验证。`its-main-backend` 容器镜像是 09-02 修复前构建的(开机自启会抢占 8002,且无 safety_chat/search_only/radius_km/compound 双写修复),验证前已 `docker stop its-main-backend`;**部署前必须 `docker compose build main-backend && docker compose up -d main-backend` 重建镜像**(knowledge-api 代码未改可不动;前端镜像同理视情况)。判断当前 8002 跑的是谁:`Get-NetTCPConnection -LocalPort 8002` 的 OwningProcess 是 wslrelay=容器,python=本地 venv
+4. **长期遗留**:公网部署 + HTTPS + 百度 AK Referer 白名单收紧(当前 `*`)、Ragas 评测集扩充、会话历史摘要压缩
+5. **MySQL 端口注意**:宿主端口 **33070**(非原 3307),因为 Windows Hyper-V 把 3307–3406 整个段保留了,`netsh interface ipv4 show excludedportrange protocol=tcp` 可验证
+6. **运行评测注意**:PowerShell 终端需先 `$env:PYTHONIOENCODING='utf-8'`,否则打印 ✅ emoji 触发 GBK `UnicodeEncodeError`
 
 ## 5. 环境与配置速记
 
@@ -53,11 +63,14 @@ its-mysql(3307) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) i
 | 本地开发启动 | `python scripts/start_dev.py`(全本地)或混合模式:容器起 mysql/redis/frontend/frontend-admin + 本地 venv 起 8001/8002(先 `docker stop its-main-backend its-knowledge-api` 防端口冲突) |
 | 测试 | `python backend/tests/test_service_station_logic.py`(47项,毫秒级) / `e2e_test_api.py`(16项,需双服务运行) |
 
-## 6. Git 状态(交接时)
+## 6. Git 状态(2026-09-02 快照)
 
-- 分支 `main`,远程 origin/main = `abf63d7`(PR #1 已合并,feature 分支已删)
-- **本地领先远程 1 个已提交**:`d4e3b1f` 文档与配置对齐(README/.env.example/docs 标题联想化)——推送失败待重试
-- **未提交**(工作区):`docs/` 三份文档大幅扩充(IMPLEMENTATION_GUIDE/INTERVIEW_QA/DEVELOPMENT_LOG)+ 本交接文档 + `import_lenovo_stations.py`(新增脏数据过滤:名称含洗车/充电桩/加油站/驿站/超市/酒店的干扰项不入库)
+- 分支 `main`,远程 origin/main = `3c303e0`(2026-09-02 最新提交,新增 HANDOVER + 采集脚本脏数据过滤 + 文档扩充)
+- **未提交**(当前工作区):
+  - `docker-compose.yml`:MySQL 宿主端口 3307→33070(因 Windows Hyper-V 保留段 3307–3406 无法绑定)
+  - `docs/HANDOVER.md`:交接文档当日现场更新(采集完成 76 城 + 806 条网点同步 + 进行中事项更新 + 端口说明)
+  - `backend/scripts/import_lenovo_stations.py`:新增 `ApiError` 异常,API 非配额错误时不标记城市 done(避免断点缓存误污染)
+  - `backend/scripts/_tmp_sync_stations_to_container.py`:临时同步脚本(可用可删,同步完成可安全删除)
 
 ## 7. 硬约束(违反会出真实事故,全文背诵)
 

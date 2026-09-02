@@ -10,7 +10,7 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-its}
       TZ: Asia/Shanghai
     ports:
-      - "3307:3306"
+      - "33070:3306"  # 宿主 3307–3406 被 Windows Hyper-V 保留段占用，改用 33070
     volumes:
       - mysql_data:/var/lib/mysql
     networks:

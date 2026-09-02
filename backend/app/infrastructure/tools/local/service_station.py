@@ -11,6 +11,35 @@ from common.infrastructure.logging.logger import logger
 SEARCH_RADIUS_KM = 200
 # 路网测距粗筛数量（百度 routematrix 单次上限 50，留余量）
 ROAD_DIST_TOP_N = 10
+# 从用户自然语言中解析"X 公里/米"的半径过滤意图，覆盖默认 200km（保持与用户输出一致，避免前后矛盾）
+_RADIUS_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(公里|千米|km|KM|Km|米|m)\s*(以|之|范围|内|半径|以内|左右|附近)?"
+)
+
+
+def _parse_radius_km(texts: list[str]) -> float:
+    """从用户文本列表中解析最小的显式半径值（公里）。
+    例如"3.5km内"→3.5；"500米范围"→0.5；没匹配到返回 SEARCH_RADIUS_KM（200）。
+    """
+    candidates = []
+    for t in texts or []:
+        if not t:
+            continue
+        for m in _RADIUS_PATTERN.finditer(t):
+            try:
+                num = float(m.group(1))
+            except ValueError:
+                continue
+            unit = m.group(2)
+            if unit in ("米", "m"):
+                km = num / 1000.0
+            else:
+                km = num
+            if 0.05 <= km <= 500:  # 有效值域: 50m ~ 500km
+                candidates.append(km)
+    if not candidates:
+        return SEARCH_RADIUS_KM
+    return min(candidates)  # 取最小半径，严格匹配用户范围
 
 def haversine(lat1, lon1, lat2, lon2):
     """计算两个经纬度之间的距离（公里）"""
@@ -30,11 +59,9 @@ def _bbox(coords: str, radius_km: float) -> tuple:
     return lat - dlat, lat + dlat, lng - dlng, lng + dlng
 
 
-def _nearest_db_fallback(db_pois: list, coords: str, max_count: int = 2) -> list:
+def _nearest_db_fallback(db_pois: list, coords: str, max_count: int = 2, radius_km: float = SEARCH_RADIUS_KM) -> list:
     """官方授权库兜底：按直线距离取最近的官方网点，保证回答中至少存在一个 ✅ 条目。
-
-    仅使用授权库自有字段（名称/地址/电话/坐标），不依赖地图侧核验，诚实标注来源与距离口径。
-    """
+    radius_km: 严格过滤半径，超出的网点不纳入。"""
     try:
         u_lat, u_lng = map(float, coords.split(','))
     except (ValueError, AttributeError):
@@ -48,7 +75,7 @@ def _nearest_db_fallback(db_pois: list, coords: str, max_count: int = 2) -> list
             dist = haversine(u_lat, u_lng, float(lat), float(lng))
         except (ValueError, TypeError):
             continue
-        if dist > SEARCH_RADIUS_KM:
+        if dist > radius_km:
             continue
         name = st.get('name', '联想官方服务站')
         addr = st.get('address', '详见官方授权库')
@@ -69,7 +96,7 @@ def _nearest_db_fallback(db_pois: list, coords: str, max_count: int = 2) -> list
 
 
 @function_tool
-async def get_nearby_official_repair_stations(ctx: RunContextWrapper, brand: str = "联想", location_hint: str = "") -> str:
+async def get_nearby_official_repair_stations(ctx: RunContextWrapper, brand: str = "联想", location_hint: str = "", radius_km: float = None) -> str:
     """
     一键式获取用户周边经过官方核验的维修站。
     这是最推荐的高速工具，集成了定位、实时探测和官方核验。
@@ -78,18 +105,23 @@ async def get_nearby_official_repair_stations(ctx: RunContextWrapper, brand: str
         brand: 品牌名称，默认 "联想"
         location_hint: 用户提到的地点线索（如 "武汉光谷"、"朝阳区"、"知春路"）。
             只要用户话语中出现任何地点信息，就必须原样传入该参数；用户未提地点时传空字符串。
+        radius_km: 可选，用户显式指定的搜索半径（公里）。若用户说"3 公里内"、"500米范围"、"10km以近"等数字+距离单位，
+            必须解析为公里数后传入；未提则留空（默认200km，并自动从 location_hint 文本中再做兜底解析）。
     """
     try:
         # 外层硬顶 22s（内部预算: 定位 4s + 检索 8s + 测距 6s = 18s，留 4s 余量）
-        return await asyncio.wait_for(_get_nearby_official_repair_stations_impl(ctx, brand, location_hint), timeout=22.0)
+        return await asyncio.wait_for(
+            _get_nearby_official_repair_stations_impl(ctx, brand, location_hint, radius_km=radius_km),
+            timeout=22.0,
+        )
     except asyncio.TimeoutError:
         logger.error(f"Integrated tool get_nearby_official_repair_stations timed out after 22s")
         return f"查询{brand}维修站服务响应超时。建议您直接在百度地图中搜索“{brand}官方维修站”。"
 
-async def get_db_official_stations(coords: str, brand: str = "联想") -> list[dict]:
+async def get_db_official_stations(coords: str, brand: str = "联想", radius_km: float = SEARCH_RADIUS_KM) -> list[dict]:
     """
     从本地官方数据库中查询维修站，返回结构化数据。
-    使用经纬度 bounding box 粗筛 + haversine 精筛，brand 参数生效。
+    使用经纬度 bounding box 粗筛 + haversine 精筛，brand 参数生效。radius_km 覆盖全局默认 200km。
     """
     if not coords or ',' not in coords:
         return []
@@ -108,7 +140,7 @@ async def get_db_official_stations(coords: str, brand: str = "联想") -> list[d
         logger.info(f"Brand {brand!r} not in local DB scope, skip DB query")
         return []
 
-    lat_min, lat_max, lng_min, lng_max = _bbox(coords, SEARCH_RADIUS_KM)
+    lat_min, lat_max, lng_min, lng_max = _bbox(coords, radius_km)
     conn = pool.connection()
     try:
         with conn.cursor() as cursor:
@@ -118,12 +150,12 @@ async def get_db_official_stations(coords: str, brand: str = "联想") -> list[d
                 (db_brand, lat_min, lat_max, lng_min, lng_max)
             )
             results = cursor.fetchall()
-            
+
             stations = []
             for row in results:
                 s_lat, s_lng = float(row[3]), float(row[4])
                 dist = haversine(lat, lng, s_lat, s_lng)
-                if dist <= SEARCH_RADIUS_KM:
+                if dist <= radius_km:
                     stations.append({
                         "name": row[0],
                         "address": row[1],
@@ -138,10 +170,32 @@ async def get_db_official_stations(coords: str, brand: str = "联想") -> list[d
     finally:
         conn.close()
 
-async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, brand: str = "联想", location_hint: str = "") -> str:
-    logger.info(f"High-speed station search started for brand: {brand}, location_hint: {location_hint!r}")
+async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, brand: str = "联想", location_hint: str = "", radius_km: float = None) -> str:
+    logger.info(f"High-speed station search started for brand: {brand}, location_hint: {location_hint!r}, caller_radius={radius_km}")
 
     session = getattr(ctx, "context", None)
+
+    # 🔍 半径解析优先级: 调用方 radius_km > 用户所有原文中的 "N公里/N米" 显式指定 > 全局 SEARCH_RADIUS_KM(200)
+    user_texts = [location_hint or ""]
+    if session is not None and hasattr(session, "items"):
+        # 只读取最近 3 条用户消息，避免历史上的旧半径干扰当前轮
+        user_count = 0
+        for it in reversed(list(session.items)):
+            if isinstance(it, dict) and it.get("role") == "user":
+                user_texts.append(str(it.get("content", "")))
+                user_count += 1
+                if user_count >= 3:
+                    break
+            elif hasattr(it, "role") and getattr(it, "role", None) == "user":
+                user_texts.append(str(getattr(it, "content", "")))
+                user_count += 1
+                if user_count >= 3:
+                    break
+    parsed_radius = _parse_radius_km(user_texts)
+    radius_override = radius_km if (radius_km and radius_km > 0) else parsed_radius
+    # 夹到合理区间: 0.1km(100m) ~ 500km
+    radius_override = max(0.1, min(float(radius_override), 500.0))
+    logger.info(f"Radius resolved: {radius_override:.2f} km (caller={radius_km}, parsed_from_user={parsed_radius:.2f})")
 
     # 1. 分级解析用户位置 (location_hint > 会话缓存 > IP兜底)，失败则返回追问提示
     from infrastructure.tools.local.location_service import (
@@ -155,9 +209,9 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
         return LOCATION_REQUIRED_NOTICE
     coords = loc.coords
     logger.info(f"Location resolved: source={loc.source.value}, coords={coords}")
-    
+
     # 2. 并行执行联网搜索（多关键词提升召回）和本地数据库查询
-    search_radius_m = SEARCH_RADIUS_KM * 1000
+    search_radius_m = radius_override * 1000
 
     async def search_keyword(kw: str) -> list:
         if not kw:
@@ -187,7 +241,7 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
 
     async def run_db_query():
         try:
-            return await asyncio.wait_for(get_db_official_stations(coords, brand), timeout=5.0)
+            return await asyncio.wait_for(get_db_official_stations(coords, brand, radius_km=radius_override), timeout=5.0)
         except Exception as e:
             logger.warning(f"DB search failed: {e}")
             return []
@@ -250,8 +304,8 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
     
     for poi in all_pois:
         dist = poi.get('road_dist', 999)
-        if dist > SEARCH_RADIUS_KM: continue
-        
+        if dist > radius_override: continue
+
         name = poi.get('name', '未知门店')
         addr = poi.get('address', '详见地图')
         tel = poi.get('tel', poi.get('telephone', '请以地图标记为准'))
@@ -275,19 +329,20 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
             nearby_third.append(item)
 
     # 构建展示逻辑
+    radius_label = f"{radius_override:g}" if radius_override != int(radius_override) else f"{int(radius_override)}"
     if nearby_official:
-        final_report += f"🏆 **官方授权推荐 ({SEARCH_RADIUS_KM}km以内)**\n"
+        final_report += f"🏆 **官方授权推荐 ({radius_label}km以内)**\n"
         final_report += "> 🛡️ **双重核验通过**：已比对联想官方授权数据库，以下网点资质真实有效：\n\n"
         final_report += "\n\n".join(nearby_official[:5]) + "\n\n"
     else:
         # ✅ 兜底：在线核验无命中时，直接从官方授权库按距离补录，保证回答中始终存在可信官方入口
-        db_fallback = _nearest_db_fallback(db_pois, coords, max_count=2)
+        db_fallback = _nearest_db_fallback(db_pois, coords, max_count=2, radius_km=radius_override)
         if db_fallback:
-            final_report += f"🏆 **官方授权推荐 ({SEARCH_RADIUS_KM}km以内)**\n"
+            final_report += f"🏆 **官方授权推荐 ({radius_label}km以内)**\n"
             final_report += "> 🛡️ **官方授权库直供**：地图侧未检索到可在线核验的网点，以下为授权库中距离最近的官方服务站：\n\n"
             final_report += "\n\n".join(db_fallback) + "\n\n"
         else:
-            final_report += f"🏆 **官方授权推荐**\n当前 {SEARCH_RADIUS_KM}km 范围内暂无经过数据库双重核验的授权服务站。\n\n"
+            final_report += f"🏆 **官方授权推荐**\n当前 {radius_label}km 范围内暂无经过数据库双重核验的授权服务站。\n\n"
             final_report += (
                 "✅ **联想官方服务热线: 400-100-6000**\n"
                 "   - 💡 附近暂未收录实体网点，请致电获取最近的官方服务站信息（官方渠道，放心拨打）\n\n"
@@ -307,10 +362,11 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
         (p.get('road_dist', 999) for p in all_pois if p.get('is_official')),
         default=999,
     )
-    if official_min_dist > 50:
+    dist_warn_threshold_km = max(50, radius_override * 4)
+    if official_min_dist > dist_warn_threshold_km:
         loc_desc = loc.display_name or coords
         final_report = (
-            f"⚠️ **位置提醒**：当前基于定位「{loc_desc}」搜索，最近的官方授权网点距此约 {official_min_dist:.0f} 公里。"
+            f"⚠️ **位置提醒**：当前基于定位「{loc_desc}」按 {radius_label}km 范围搜索，最近的官方授权网点距此约 {official_min_dist:.0f} 公里。"
             "若与您实际位置不符，请告诉我您的城市或区域，我将立即重新查询。\n\n" + final_report
         )
     # IP 兜底定位精度差（城市级甚至错位），必须显式告知口径，杜绝静默错位
@@ -322,7 +378,7 @@ async def _get_nearby_official_repair_stations_impl(ctx: RunContextWrapper, bran
         )
 
     if not all_pois:
-        final_report = f"抱歉，在您的位置（{loc.display_name or coords}）附近 {SEARCH_RADIUS_KM}km 内暂时没有找到{brand}维修站。"
+        final_report = f"抱歉，在您的位置（{loc.display_name or coords}）附近 {radius_label}km 内暂时没有找到{brand}维修站。"
         return final_report
 
     # 定位口径标注:告知用户距离基于哪个位置测算,便于发现定位偏差并主动纠正

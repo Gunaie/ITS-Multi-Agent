@@ -34,3 +34,5 @@ Thumbs.db
 # Data caches & temp files
 backend/scripts/.lenovo_stations_cache.json
 backend/knowledge/data/tmp/
+# 评测每次运行的产物（不入库）
+eval_results.json

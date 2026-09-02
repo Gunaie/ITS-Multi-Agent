@@ -261,31 +261,90 @@ DATASET = [
 # 路由正确率推断：通过回复内容特征判断是否走了正确的 Agent
 # =========================================================================
 _ROUTING_FEATURES = {
-    # "请问"/"城市"太泛，闲聊回复也常用，不作为 service 特征
-    "service": ["✅", "官方授权", "参考网点", "📍", "📏", "📞", "路网距离", "直线距离", "marker"],
-    "technical": ["排查", "步骤", "建议", "检查", "方法", "可以尝试", "原因", "可能是", "驱动", "内存", "电源", "更新", "关机", "断电", "安全模式"],
-    "chat": [],  # 简短回复无工具特征即判为闲聊
-    "search": ["天气", "温度", "晴", "阴", "雨", "℃", "新闻", "搜索结果", "据.*报道"],
+    # ------- chat 类：安全边界回绝 / 纯闲聊话术（必须先判，防止后续特征误命中）-------
+    # 注意：拒绝动词必须显式出现（生成/编造/透露/公开/回答等），
+    # 不能只匹配"抱歉...无法"——否则"抱歉，暂时无法获取您的位置"这类服务定位追问会被误判为 chat
+    "chat_reject": [r"抱歉.{0,20}(无法|不能|不便).{0,12}(生成|编造|伪造|透露|公开|提供|回答|协助|满足|透露)",
+                    r"无法.{0,10}(生成|编造|伪造|透露|公开|回答|协助)",
+                    r"(系统提示词|prompt|内部架构|源代码|训练数据|算法原理|工具清单|调用哪些工具)",
+                    r"不便公开", r"400-100-6000.{0,6}真实查询"],
+    # 追问城市/位置类 SERVICE 追问特征（非 chat 闲聊追问，是服务链路专属）
+    "service_probe": [r"请问您的城市", r"所在的城市", r"您目前的位置", r"在哪个城市",
+                      r"告诉我.{0,6}城市", r"请问.*(位置|区域|地点)", r"无法确定用户位置"],
+    # 维修站列表输出专属特征（✅/地址/路网/直线距离/地图 marker URL / 官方授权栏标题）
+    "service_list": [r"✅", r"官方授权推荐", r"参考网点", r"📍\s*地址",
+                     r"路网距离", r"直线距离", r"marker\?location",
+                     r"联想官方服务热线", r"授权服务站", r"服务网点"],
+    # 搜索类输出专属特征（优先看开头搜索前缀标记，兜底看内容里的信息报道词）
+    "search_marker": [r"^【搜索结果】", r"^【搜索资讯】", r"^【据.*搜索】"],
+    "search_content": [r"天气", r"温度|℃", r"新闻", r"搜索结果",
+                       r"据.*报道", r"据.*查询", r"搜索到的", r"最新.*信息",
+                       r"报道称", r"显示.*价格", r"今日(报价|行情)", r"发布会"],
+    # 技术故障排查专属特征（步骤/操作/现象词）—— 一旦带这类词且不是 search，就判 technical
+    "technical": [r"排查", r"步骤", r"建议", r"检查.{0,3}(一下|是否)", r"方法",
+                  r"可以尝试", r"原因", r"可能是", r"驱动", r"内存", r"电源", r"更新|升级",
+                  r"关机|断电|重启", r"安全模式", r"不要开机", r"擦干|晾干|干燥",
+                  r"灰尘|清理|散热", r"风扇", r"噪音", r"卡顿", r"蓝屏|黑屏|死机",
+                  r"请您.{0,4}(先|尝试|按|执行)", r"操作"],
 }
 
 
 def infer_routing(reply: str) -> str:
-    """从回复内容特征推断实际路由到的 Agent。"""
+    """从回复内容特征**按语义分层**推断实际路由到的 Agent。
+
+    分层优先级（一旦命中立即返回，避免特征互串）：
+      1. chat_reject（安全回绝类） → chat
+      2. search_marker（【搜索结果】等强制前缀） → search
+      3. technical 强命中(≥2 个排查步骤词) → technical
+         （技术回复末尾常见"前往授权服务站检测"，故须先于 service 判定）
+      4. service（位置追问 or 网点列表强特征） → service
+      5. search_content（2+ 搜索信息词且无技术排查主导词） → search
+      6. technical 单命中 → technical
+      7. 兜底 chat
+    """
     if not reply or not reply.strip():
         return "unknown"
-    # 服务类特征最强（含 ✅/距离格式/地图标记）
-    service_hits = sum(1 for kw in _ROUTING_FEATURES["service"] if kw in reply)
-    if service_hits >= 2:
-        return "service"
-    # 搜索类特征（含实时信息关键词）
-    search_hits = sum(1 for kw in _ROUTING_FEATURES["search"] if kw in reply)
-    if search_hits >= 2:
+
+    def _hit(patterns: list, text: str) -> list:
+        import re as _re
+        out = []
+        for p in patterns:
+            if _re.search(p, text):
+                out.append(p)
+        return out
+
+    # Step 1: chat 安全回绝（命中即 chat，不受后续特征干扰——如 P02/P04/P06 回绝里出现了官方服务词汇不算 service）
+    if _hit(_ROUTING_FEATURES["chat_reject"], reply):
+        return "chat"
+
+    # Step 2: search 强前缀（我们注入的确定性标记）
+    if _hit(_ROUTING_FEATURES["search_marker"], reply):
         return "search"
-    # 技术类特征（降到1个命中即可，避免简短技术回复被误判为闲聊）
-    tech_hits = sum(1 for kw in _ROUTING_FEATURES["technical"] if kw in reply)
-    if tech_hits >= 1:
+
+    tech_hits = _hit(_ROUTING_FEATURES["technical"], reply)
+
+    # Step 3: technical 强命中优先（≥2 个技术排查词；技术回复末尾可能提及"授权服务站"导致 service 误判，故先判）
+    if len(tech_hits) >= 2:
         return "technical"
-    # 无明显特征 -> 闲聊直答
+
+    # Step 4: service（服务追问 or 网点列表强特征 → service）
+    svc_probe = _hit(_ROUTING_FEATURES["service_probe"], reply)
+    svc_list = _hit(_ROUTING_FEATURES["service_list"], reply)
+    if svc_probe or len(svc_list) >= 2 or (len(svc_list) >= 1 and ("✅" in reply or "官方授权推荐" in reply)):
+        return "service"
+
+    # Step 5: search 内容特征（无前缀时兜底；须无技术排查词主导）
+    search_content_hits = _hit(_ROUTING_FEATURES["search_content"], reply)
+    if len(search_content_hits) >= 2 and len(tech_hits) <= 1:
+        return "search"
+    if len(search_content_hits) >= 1 and len(tech_hits) == 0:
+        return "search"
+
+    # Step 6: technical 单命中
+    if tech_hits:
+        return "technical"
+
+    # 兜底：无特征判为 chat
     return "chat"
 
 

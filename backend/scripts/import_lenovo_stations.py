@@ -83,6 +83,10 @@ class QuotaExhausted(Exception):
     """百度 AK 当日配额耗尽"""
 
 
+class ApiError(Exception):
+    """百度 Place API 调用失败（非配额类错误：IP 校验失败/参数错误等），跳过该城市且不标记 done"""
+
+
 def _name_addr_hash(name: str, address: str) -> str:
     return hashlib.md5(f"{name.strip()}|{address.strip()}".encode("utf-8")).hexdigest()
 
@@ -131,7 +135,7 @@ def search_city(client: httpx.Client, city: str, query: str, interval: float) ->
             data = resp.json()
         except Exception as e:
             logger.warning(f"[{city}] {query} request failed: {e}")
-            break
+            raise ApiError(f"request failed: {e}")
 
         status = data.get("status")
         if status != 0:
@@ -139,7 +143,7 @@ def search_city(client: httpx.Client, city: str, query: str, interval: float) ->
             if status == QUOTA_ERROR_STATUS or "配额" in str(msg):
                 raise QuotaExhausted(f"[{city}] {query}: {msg}")
             logger.warning(f"[{city}] {query} API error: status={status}, msg={msg}")
-            break
+            raise ApiError(f"status={status}, msg={msg}")
 
         results = data.get("results", [])
         all_results.extend(results)
@@ -304,6 +308,7 @@ def main():
     try:
         for i, city in enumerate(pending, 1):
             city_pois = []
+            api_failed = False
             try:
                 for query in QUERIES:
                     city_pois.extend(search_city(client, city, query, args.interval))
@@ -315,22 +320,28 @@ def main():
                 print(f"   已完成 {len(done_cities)}/{len(cities)} 个城市，进度已保存。")
                 print("   明天配额重置后重新运行同一命令即可从断点继续。")
                 sys.exit(2)
+            except ApiError as e:
+                # API 错误(IP 白名单/参数/网络): 跳过本轮城市，不标记 done，下次重跑自动重试
+                api_failed = True
+                print(f"[{i}/{len(pending)}] {city}: ⚠️ API错误，跳过不标记完成({e})，下次重跑自动重试")
+                continue
 
-            new_records = []
-            for poi in city_pois:
-                rec = normalize_poi(poi, city)
-                if rec and rec["name_addr_hash"] not in records:
-                    records[rec["name_addr_hash"]] = rec
-                    new_records.append(rec)
-            total_new += len(new_records)
+            if not api_failed:
+                new_records = []
+                for poi in city_pois:
+                    rec = normalize_poi(poi, city)
+                    if rec and rec["name_addr_hash"] not in records:
+                        records[rec["name_addr_hash"]] = rec
+                        new_records.append(rec)
+                total_new += len(new_records)
 
-            # 断点保存 + 正式模式逐城立即入库（中断/配额耗尽不丢数据）
-            done_cities.append(city)
-            save_cache(cache)
-            if not args.dry_run and new_records:
-                save_to_db(new_records)
+                # 断点保存 + 正式模式逐城立即入库（中断/配额耗尽不丢数据）
+                done_cities.append(city)
+                save_cache(cache)
+                if not args.dry_run and new_records:
+                    save_to_db(new_records)
 
-            print(f"[{i}/{len(pending)}] {city}: +{len(new_records)} 条新网点 (累计 {len(records)})")
+                print(f"[{i}/{len(pending)}] {city}: +{len(new_records)} 条新网点 (累计 {len(records)})")
     finally:
         client.close()
 
