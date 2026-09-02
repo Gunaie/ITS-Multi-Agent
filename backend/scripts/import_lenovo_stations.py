@@ -161,6 +161,9 @@ def normalize_poi(poi: dict, city: str) -> dict | None:
     # 只保留联想相关网点，过滤同名异业的干扰结果
     if "联想" not in name and "lenovo" not in name.lower():
         return None
+    # 过滤名称含"联想"但非维修网点的干扰项（如"联想家园"小区洗车店、"联想充电桩"）
+    if any(k in name for k in ("洗车", "充电桩", "加油站", "驿站", "超市", "酒店")):
+        return None
     return {
         "name": name,
         "address": address,
