@@ -111,15 +111,20 @@ async def judge_llm(system_prompt: str, user_prompt: str) -> str:
         "temperature": 0,
         "max_tokens": 4096,
     }
-    try:
-        # qwen3.8-max 为思考模型，faithfulness 长输出 judge 实测可超 60s，放宽到 180s
-        async with _JUDGE_SEM, httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"] or ""
-    except Exception as e:
-        print(f"  [judge LLM 调用失败] {type(e).__name__}: {e}")
-        return ""
+    # 失败重试 3 次（指数退避 2s/4s），吸收网络瞬断/百炼偶发超时
+    for attempt in range(3):
+        try:
+            # qwen3.8-max 为思考模型，faithfulness 长输出 judge 实测可超 60s，放宽到 180s
+            async with _JUDGE_SEM, httpx.AsyncClient(timeout=180.0) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"] or ""
+        except Exception as e:
+            if attempt == 2:
+                print(f"  [judge LLM 调用失败(已重试3次)] {type(e).__name__}: {e}")
+                return ""
+            print(f"  [judge LLM 第{attempt + 1}次失败，重试] {type(e).__name__}: {e}")
+            await asyncio.sleep(2 * (attempt + 1))
 
 
 def parse_json_obj(text: str) -> dict:
@@ -233,11 +238,18 @@ async def evaluate_case(client: httpx.AsyncClient, case: dict) -> dict:
     """评测单条：取检索结果 + 并发跑 4 个 LLM 指标。"""
     cid = case["id"]
     print(f"\n[{cid}] {case['question']}")
-    try:
-        r = await fetch_query_eval(client, case["question"])
-    except Exception as e:
-        print(f"  [ERROR] /query_eval 调用失败: {e}")
-        return {"id": cid, "question": case["question"], "error": str(e)}
+    # /query_eval 失败重试 3 次（退避 2s/4s），吸收网络瞬断/容器内 LLM 偶发失败
+    r = None
+    for attempt in range(3):
+        try:
+            r = await fetch_query_eval(client, case["question"])
+            break
+        except Exception as e:
+            if attempt == 2:
+                print(f"  [ERROR] /query_eval 调用失败(已重试3次): {e}")
+                return {"id": cid, "question": case["question"], "error": str(e)}
+            print(f"  [/query_eval 第{attempt + 1}次失败，重试] {type(e).__name__}: {e}")
+            await asyncio.sleep(2 * (attempt + 1))
 
     answer, contexts = r["answer"], r["contexts"]
     hit = retrieval_hit(case["expected_doc"], contexts)

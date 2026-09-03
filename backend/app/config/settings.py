@@ -35,15 +35,15 @@ class Settings(BaseSettings):
     # ==================== 模型配置 ====================
 
     ORCHESTRATOR_MODEL_NAME: Optional[str] = Field(
-        default="qwen3.7-max-2026-06-08",
+        default="qwen3.7-max-2026-05-20",
         description="调度Agent(orchestrator)模型名称"
     )
     TECHNICAL_MODEL_NAME: Optional[str] = Field(
-        default="qwen3.8-max-0902",
+        default="qwen3-max-2026-01-23",
         description="技术专家(technical)模型名称"
     )
     SERVICE_MODEL_NAME: Optional[str] = Field(
-        default="deepseek-v4-flash-0731",
+        default="qwen3.8-flash",
         description="服务专家(service)模型名称"
     )
 
