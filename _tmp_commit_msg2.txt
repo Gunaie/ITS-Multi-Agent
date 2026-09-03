@@ -1,8 +1,0 @@
-chore(docker): 修复清华apt与PyPI镜像今日403导致构建失败
-
-- base: python:3.11-slim -> python:3.11-slim-bookworm (Debian稳定版)
-  原因: slim默认tag现在指向trixie/sid(unstable)，清华不提供unstable同步。
-- apt: 删除向清华源sed替换(今日清华deb镜像全站HTTP 403)，使用官方deb.debian.org
-- pip: 清华pypi.tuna今日出现versions:none无法安装fastapi
-  改为官方PyPI主源+阿里云PyPI额外索引双兜底，显式加--timeout 120 / --retries 3 / --prefer-binary。
-- 以上改动同时应用于backend/app/Dockerfile(main-backend)和backend/knowledge/Dockerfile。

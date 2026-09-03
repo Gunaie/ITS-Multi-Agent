@@ -47,7 +47,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 2. ✅ **已完成(2026-09-03)**:百度配额恢复后全量验证通过
    - 全量 `eval_agent_quality.py`(25 条含百度服务类): 在线 24/25=96%,唯一"失败"R04 是评估器误判(后端行为正确——工具正常追问城市),收紧 `chat_reject` 正则(必须搭配生成/编造/透露等拒绝动词)后离线重放 **25/25 = 100%**;分类:routing 6/6、technical 5/5、service 3/3、safety 7/7、multiturn 4/4
    - `e2e_test_api.py`: 首次 15/16,发现 compound 流程会话历史双写(stage1/stage2 两次 Runner.run 各写一条 user 消息)→ `run_compound_flow` 在 stage2 前移除带 [系统提示] 的内部 user item,重跑 **16/16 全部通过**
-3. ⚠️ **Docker 容器镜像过期(重要)**:本次修复全部在本地 venv 验证。`its-main-backend` 容器镜像是 09-02 修复前构建的(开机自启会抢占 8002,且无 safety_chat/search_only/radius_km/compound 双写修复),验证前已 `docker stop its-main-backend`;**部署前必须 `docker compose build main-backend && docker compose up -d main-backend` 重建镜像**(knowledge-api 代码未改可不动;前端镜像同理视情况)。判断当前 8002 跑的是谁:`Get-NetTCPConnection -LocalPort 8002` 的 OwningProcess 是 wslrelay=容器,python=本地 venv
+3. ✅ **Docker 镜像重建 + 镜像源 403 修复(已完成 2026-09-03)**:`its-main-backend` 镜像已于 09-03 01:12 重建成功(含 safety_chat/search_only/radius_km/compound 双写等全部修复)。重建时踩坑:**清华 apt 镜像全站 HTTP 403 + PyPI 返回 versions:none + `python:3.11-slim` 默认 tag 指向 Debian trixie/sid(unstable) 清华无同步**。修复(两个 Dockerfile 同步改,commit `3983463`):基础镜像改 `python:3.11-slim-bookworm` 锁稳定版;apt 删清华 sed 换源回归官方 `deb.debian.org`;pip 改官方 PyPI 主源+阿里云额外索引双兜底,加 `--timeout 120 --retries 3 --prefer-binary`。`knowledge-api` Dockerfile 同步改但镜像未重建(代码未变,跑 09-01 旧镜像 OK)。判断当前 8002 跑的是谁:`Get-NetTCPConnection -LocalPort 8002` 的 OwningProcess 是 wslrelay=容器,python=本地 venv
 4. **长期遗留**:公网部署 + HTTPS + 百度 AK Referer 白名单收紧(当前 `*`)、Ragas 评测集扩充、会话历史摘要压缩
 5. **MySQL 端口注意**:宿主端口 **33070**(非原 3307),因为 Windows Hyper-V 把 3307–3406 整个段保留了,`netsh interface ipv4 show excludedportrange protocol=tcp` 可验证
 6. **运行评测注意**:PowerShell 终端需先 `$env:PYTHONIOENCODING='utf-8'`,否则打印 ✅ emoji 触发 GBK `UnicodeEncodeError`
@@ -63,14 +63,14 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 | 本地开发启动 | `python scripts/start_dev.py`(全本地)或混合模式:容器起 mysql/redis/frontend/frontend-admin + 本地 venv 起 8001/8002(先 `docker stop its-main-backend its-knowledge-api` 防端口冲突) |
 | 测试 | `python backend/tests/test_service_station_logic.py`(47项,毫秒级) / `e2e_test_api.py`(16项,需双服务运行) |
 
-## 6. Git 状态(2026-09-02 快照)
+## 6. Git 状态(2026-09-03 快照)
 
-- 分支 `main`,远程 origin/main = `3c303e0`(2026-09-02 最新提交,新增 HANDOVER + 采集脚本脏数据过滤 + 文档扩充)
-- **未提交**(当前工作区):
-  - `docker-compose.yml`:MySQL 宿主端口 3307→33070(因 Windows Hyper-V 保留段 3307–3406 无法绑定)
-  - `docs/HANDOVER.md`:交接文档当日现场更新(采集完成 76 城 + 806 条网点同步 + 进行中事项更新 + 端口说明)
-  - `backend/scripts/import_lenovo_stations.py`:新增 `ApiError` 异常,API 非配额错误时不标记城市 done(避免断点缓存误污染)
-  - `backend/scripts/_tmp_sync_stations_to_container.py`:临时同步脚本(可用可删,同步完成可安全删除)
+- 分支 `main`,远程 origin/main = `3983463`(2026-09-03 最新提交)
+- 近 3 个提交:
+  - `3983463` chore(docker): 修复清华 apt 与 PyPI 镜像今日 403 导致构建失败(base 改 `-bookworm` + apt 回归官方源 + pip 双源兜底,详见进行中事项 #3)
+  - `93c24c5` fix(intent/routing/station/session): 修复 Q2/Q3/Q10/Q11/Q13 5Case,eval 25/25 & e2e 16/16(含 docker-compose 端口 3307→33070、import 脚本 ApiError 等 12 文件)
+  - `3c303e0` docs: 新增 HANDOVER + 采集脚本脏数据过滤 + 文档扩充
+- **工作区**:干净(仅 `_tmp_commit_msg2.txt` 临时文件残留,可删)
 
 ## 7. 硬约束(违反会出真实事故,全文背诵)
 
