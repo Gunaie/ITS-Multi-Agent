@@ -800,7 +800,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             # 🔍 search_only 分支：保证首条输出 delta 前有搜索前缀标记
             _search_prefix_emitted = (intent != "search_only")
             # 为了在 SSE 中优雅处理超时，我们使用 asyncio.timeout 包装整个生成逻辑
-            # glm-5.2 工具调用循环（知识库检索+联网搜索）需要更长时间，超时提至 120s
+            # 技术专家工具调用循环（知识库检索+联网搜索）需要更长时间，超时提至 120s
             try:
                 async with asyncio.timeout(120.0):
                     async for event in stream.stream_events():

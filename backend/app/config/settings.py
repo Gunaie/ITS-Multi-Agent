@@ -39,7 +39,7 @@ class Settings(BaseSettings):
         description="调度Agent(orchestrator)模型名称"
     )
     TECHNICAL_MODEL_NAME: Optional[str] = Field(
-        default="glm-5.2",
+        default="qwen3.8-max-0902",
         description="技术专家(technical)模型名称"
     )
     SERVICE_MODEL_NAME: Optional[str] = Field(

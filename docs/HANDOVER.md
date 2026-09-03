@@ -16,7 +16,7 @@
 | 4 | [docs/DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md) | 全周期演进记录,理解"为什么这样设计" |
 | 5 | [docs/INTERVIEW_QA.md](./INTERVIEW_QA.md) | 40个问答,最深层的实现细节都在里面 |
 
-## 3. 当前运行状态(2026-09-02)
+## 3. 当前运行状态(2026-09-03)
 
 ### 运行模式:全 Docker(6 容器)
 
@@ -48,34 +48,39 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
    - 全量 `eval_agent_quality.py`(25 条含百度服务类): 在线 24/25=96%,唯一"失败"R04 是评估器误判(后端行为正确——工具正常追问城市),收紧 `chat_reject` 正则(必须搭配生成/编造/透露等拒绝动词)后离线重放 **25/25 = 100%**;分类:routing 6/6、technical 5/5、service 3/3、safety 7/7、multiturn 4/4
    - `e2e_test_api.py`: 首次 15/16,发现 compound 流程会话历史双写(stage1/stage2 两次 Runner.run 各写一条 user 消息)→ `run_compound_flow` 在 stage2 前移除带 [系统提示] 的内部 user item,重跑 **16/16 全部通过**
 3. ✅ **Docker 镜像重建 + 镜像源 403 修复(已完成 2026-09-03)**:`its-main-backend` 镜像已于 09-03 01:12 重建成功(含 safety_chat/search_only/radius_km/compound 双写等全部修复)。重建时踩坑:**清华 apt 镜像全站 HTTP 403 + PyPI 返回 versions:none + `python:3.11-slim` 默认 tag 指向 Debian trixie/sid(unstable) 清华无同步**。修复(两个 Dockerfile 同步改,commit `3983463`):基础镜像改 `python:3.11-slim-bookworm` 锁稳定版;apt 删清华 sed 换源回归官方 `deb.debian.org`;pip 改官方 PyPI 主源+阿里云额外索引双兜底,加 `--timeout 120 --retries 3 --prefer-binary`。`knowledge-api` Dockerfile 同步改但镜像未重建(代码未变,跑 09-01 旧镜像 OK)。判断当前 8002 跑的是谁:`Get-NetTCPConnection -LocalPort 8002` 的 OwningProcess 是 wslrelay=容器,python=本地 venv
-4. **长期遗留**:公网部署 + HTTPS + 百度 AK Referer 白名单收紧(当前 `*`)、Ragas 评测集扩充、会话历史摘要压缩
-5. **MySQL 端口注意**:宿主端口 **33070**(非原 3307),因为 Windows Hyper-V 把 3307–3406 整个段保留了,`netsh interface ipv4 show excludedportrange protocol=tcp` 可验证
-6. **运行评测注意**:PowerShell 终端需先 `$env:PYTHONIOENCODING='utf-8'`,否则打印 ✅ emoji 触发 GBK `UnicodeEncodeError`
+4. ✅ **glm-5.2 额度耗尽 → 全链路模型切换(已完成 2026-09-03)**:glm-5.2 百炼免费额度彻底耗尽(评测 judge 403 暴露),切换后分工为 **technical=qwen3.8-max-0902 / RAG生成=qwen3.7-max-2026-06-08**(orchestrator/service 不变)。切换涉及 5 处:根 `.env`、`backend/knowledge/.env`、`settings.py` 默认值、`.env.example`、两个运行中容器(已 `docker cp` .env + restart,同步生效)。**注意:容器内 .env 是构建时 COPY 的,下次重建镜像会从宿主机重新 COPY,宿主机已是新值,无需再手工同步**。兼容性已验证:qwen3.8-max 对 extra_body `tool_stream` 参数忽略不报错;它是思考模型(reasoning_content),与 qwen3.7-max 同系列,agents SDK 兼容。验证结果:`e2e_test_api.py` **16/16 全通过**(含场景C 技术问答走知识库工具、场景D MCP 联网搜索真实天气数据)
+5. ✅ **RAG 质量评测体系搭建(2026-09-03,自建 LLM-as-judge)**:新增 `backend/tests/eval_rag_quality.py`(15 条数据集 × 4 指标:faithfulness/answer_relevancy/context_precision/context_recall + 检索命中率,指标对齐 Ragas,不依赖 ragas 库避免 langchain 版本冲突);知识库新增 `POST /query_eval` 接口(routers.py/schema.py,返回 contexts 供评测,生产 /query 不受影响)。**未完成遗留:全量评测尚未拿到有效四指标结果**——三轮尝试均被额度/限流打断:(a) judge=glm-5.2 全 403;(b) 换 judge=qwen3.8-max 后 faithfulness 14/15 超时(思考模型长输出,60s 不够,已放宽 180s);(c) 提速改 4 路并发触发百炼限流大面积失败,已回调为保守并发(条目 2 路 + judge 全局 4)。**接手后直接重跑** `$env:RAG_EVAL_JUDGE_MODEL="qwen3.8-max-0902"; .\backend\app\.venv\Scripts\python.exe backend\tests\eval_rag_quality.py` 即可,预计 10-20 分钟;已有参考数据:检索命中率 100%(15/15)、answer_relevancy 0.967、context_recall 0.960 均正常,仅 faithfulness 因 judge 超时无效。`docs/RAG_EVAL_REPORT.md` 当前为无效轮报告(已标注)
+6. **长期遗留**:公网部署 + HTTPS + 百度 AK Referer 白名单收紧(当前 `*`)、RAG 评测全量重跑(见 #5)、Ragas 评测集扩充
+7. **MySQL 端口注意**:宿主端口 **33070**(非原 3307),因为 Windows Hyper-V 把 3307–3406 整个段保留了,`netsh interface ipv4 show excludedportrange protocol=tcp` 可验证
+8. **运行评测注意**:PowerShell 终端需先 `$env:PYTHONIOENCODING='utf-8'`,否则打印 ✅ emoji 触发 GBK `UnicodeEncodeError`
 
 ## 5. 环境与配置速记
 
 | 项 | 值/位置 |
 |----|---------|
-| 模型 | orchestrator=qwen3.7-max / technical=glm-5.2 / service=deepseek-v4-flash / RAG生成=glm-5.2 / embedding=text-embedding-v3(阿里百炼 OpenAI 兼容接口) |
+| 模型 | orchestrator=qwen3.7-max-2026-06-08 / technical=qwen3.8-max-0902(原 glm-5.2 因百炼额度耗尽已于 09-03 切换) / service=deepseek-v4-flash-0731 / 知识库RAG生成=qwen3.7-max-2026-06-08 / embedding=text-embedding-v3(阿里百炼 OpenAI 兼容接口) |
 | 配置 | `backend/app/.env`(主后端) / `backend/knowledge/.env`(知识库,**独立文件易漏改**) / 根 `.env`(Docker compose) / `.env.example`(模板) |
 | 百度**双 AK** | `BAIDU_MAP_AK`=服务端AK(geocode/POI/测距);`BAIDU_MAP_AK_BROWSER`=浏览器端AK(前端JS定位,**新规:服务端AK不能用于浏览器端**);白名单不支持http://头,localhost 无法过校验,开发期填 `*` |
 | 数据库 | MySQL 库名 `its`;`bcrypt==4.0.1` 锁死(passlib 1.7.4 不兼容 ≥4.1) |
 | 本地开发启动 | `python scripts/start_dev.py`(全本地)或混合模式:容器起 mysql/redis/frontend/frontend-admin + 本地 venv 起 8001/8002(先 `docker stop its-main-backend its-knowledge-api` 防端口冲突) |
-| 测试 | `python backend/tests/test_service_station_logic.py`(47项,毫秒级) / `e2e_test_api.py`(16项,需双服务运行) |
+| 测试 | `python backend/tests/test_service_station_logic.py`(47项,毫秒级) / `e2e_test_api.py`(16项,需双服务运行) / `eval_rag_quality.py`(RAG 评测,详见进行中事项 #5) |
 
-## 6. Git 状态(2026-09-03 快照)
+## 6. Git 状态(2026-09-03 交接快照)
 
-- 分支 `main`,远程 origin/main = `3983463`(2026-09-03 最新提交)
+- 分支 `main`,远程 origin/main = `84b146c`(2026-09-03,会话历史压缩修复)
 - 近 3 个提交:
-  - `3983463` chore(docker): 修复清华 apt 与 PyPI 镜像今日 403 导致构建失败(base 改 `-bookworm` + apt 回归官方源 + pip 双源兜底,详见进行中事项 #3)
-  - `93c24c5` fix(intent/routing/station/session): 修复 Q2/Q3/Q10/Q11/Q13 5Case,eval 25/25 & e2e 16/16(含 docker-compose 端口 3307→33070、import 脚本 ApiError 等 12 文件)
-  - `3c303e0` docs: 新增 HANDOVER + 采集脚本脏数据过滤 + 文档扩充
-- **工作区**:干净(仅 `_tmp_commit_msg2.txt` 临时文件残留,可删)
+  - `84b146c` fix(session): 压缩阈值改为只数对话条目，修复 E2E M场景误触发压缩
+  - `6ad0e41` feat(session): 会话历史摘要压缩，防止长对话上下文溢出
+  - `449c536` docs(handover): 补记 Docker 镜像重建+镜像源403修复调试记录
+- ⚠️ **工作区有待提交变更(交接时未 commit)**,均为本轮模型切换+RAG 评测工作,接手后先审阅提交:
+  - 已修改:`settings.py`+`technical_agent.py`(模型切换)、`main.py`+`history_compression.py`(注释中性化)、`backend/knowledge/routers.py`+`schemas/schema.py`(/query_eval 接口)、`README.md`+`.env.example`+`docs/IMPLEMENTATION_GUIDE.md`+`docs/INTERVIEW_QA.md`(模型分工说明)
+  - 新增:`backend/tests/eval_rag_quality.py`(评测脚本)、`docs/RAG_EVAL_REPORT.md`(报告,含无效标注)、`backend/tests/rag_eval_results.json`(结果数据)
+  - 注意:`.env`/`backend/knowledge/.env` 在 .gitignore 中不入库,但两个运行中容器已经 docker cp 同步过新配置
 
 ## 7. 硬约束(违反会出真实事故,全文背诵)
 
 1. **提示词严禁出现未注入/已移除的工具名**——哪怕语义是"禁止调用",Flash 模型会当真调用 → ModelBehaviorError
-2. **glm-5.2 流式 Function Calling 必须**在 openai_client.py extra_body 注入 `tool_stream: True`,否则静默失败(不调工具直接编答案)
+2. **流式 Function Calling 必须**在 technical_agent.py 的 ModelSettings extra_body 注入 `tool_stream: True`(glm 系列必需,缺失会静默失败不调工具直接编答案;qwen 系列忽略该参数无害,当前注入保留作兼容)
 3. **自定义 MCP 类必须带 `use_structured_content=False` 属性**,否则每次调用 AttributeError 被 SDK 吞掉 → 模型重试至 Max turns exceeded;MCP 客户端用自研 `BailianWebSearchMCP`(httpx POST,协议锁 2024-11-05,3次重试分级日志)
 4. **Redis 会话必须 JSON 序列化,禁 pickle**
 5. **temperature=0 下模型会模仿会话历史**——会话历史必须过滤工具调用条目(仅保留调度者自己的交接记录);测试必须用唯一 session_id,复用会话=假失败
@@ -88,6 +93,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 12. **Docker Desktop 端口转发言代理会绕过端口冲突检测**——本机其他项目容器(如 psycheflow-chroma 占 8001)可静默劫持流量,排查端口问题先 `docker ps` 全量看
 13. nginx 前端容器访问本地后端用 `host.docker.internal:8001/8002`
 14. /chat 请求体字段是 **question** 不是 message;登录是 OAuth2 表单格式 `data=` 非 json
+15. **百炼免费额度三坑**:单模型日配额耗尽=403 Forbidden;**并发上限极低**(实测 4 路条目并发即触发限流,表现为请求挂起/ReadTimeout,client timeout 调多大都没用);qwen3.8-max-0902 为**思考模型**(单次调用 1-2 分钟,响应含 reasoning_content,`enable_thinking=false` 实测无效),调用超时要放宽到 180s
 
 ## 8. 常用命令速查
 

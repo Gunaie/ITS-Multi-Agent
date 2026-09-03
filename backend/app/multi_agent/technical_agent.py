@@ -21,7 +21,7 @@ technical_agent = Agent(
     instructions=load_prompt("technical_agent"),
     handoff_description="专门处理硬件故障诊断、软件问题排查、系统安装建议以及实时新闻/资讯查询（如天气、股价、最新技术发布等）。当用户询问“怎么做”、“为什么”、“是什么”或涉及实时数据时，请交接给此专家。",
     model=technical_model,
-    model_settings=ModelSettings(temperature=0, extra_body={"tool_stream": True}),  # glm-5.2 流式工具调用必需 tool_stream
+    model_settings=ModelSettings(temperature=0, extra_body={"tool_stream": True}),  # 流式工具调用必需（glm 系列需要；qwen 会忽略该参数）
     tools=[query_knowledge, builtin_web_search],
     # mcp_servers 将在运行时由调度者根据连接情况动态注入
 )

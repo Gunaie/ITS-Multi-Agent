@@ -113,7 +113,7 @@ graph TD
 ### 1. 应用后端 (`backend/app`)
 作为系统的“大脑”与“神经中枢”，负责 Agent 编排与业务逻辑。
 - **智能调度专家 (Orchestrator)**: 意图网关三分支编排——纯服务诉求（短句+服务关键词）直连业务服务专家；复合意图（技术+服务）先技术后服务合并回答；技术/闲聊类经调度专家路由，支持 Agent 间任务交接（Handoff）。
-- **三模型分工**: 调度=qwen3.7-max、技术专家+知识库RAG生成=glm-5.2（启用 tool_stream 流式工具调用）、服务专家=deepseek-v4-flash，按角色择优分配。
+- **三模型分工**: 调度=qwen3.7-max、技术专家=qwen3.8-max（启用 tool_stream 流式工具调用，原 glm-5.2 因百炼额度耗尽已切换）、服务专家=deepseek-v4-flash，知识库RAG生成=qwen3.7-max，按角色择优分配。
 - **外部能力集成**: 通过 **MCP (Model Context Protocol)** 接入联网搜索，并通过百度地图官方 API 接入地理位置服务。
 - **会话持久化**: 基于 Redis 实现分布式 Session 管理，支持多平台会话隔离。
 

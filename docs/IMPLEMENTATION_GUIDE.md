@@ -29,7 +29,7 @@
 
 1. **阿里云百炼** `AL_BAILIAN_API_KEY`
    - 开通百炼平台,创建 API Key
-   - 需要可用模型:`qwen3.7-max`(调度)、`glm-5.2`(技术专家+RAG生成)、`deepseek-v4-flash-0731`(服务专家)、`text-embedding-v3`(向量化)
+   - 需要可用模型:`qwen3.7-max`(调度)、`qwen3.8-max-0902`(技术专家)、`deepseek-v4-flash-0731`(服务专家)、`qwen3.7-max-2026-06-08`(知识库RAG生成)、`text-embedding-v3`(向量化)。原 glm-5.2 因百炼免费额度耗尽已于 2026-09-03 弃用
    - OpenAI 兼容接口地址:`https://dashscope.aliyuncs.com/compatible-mode/v1`
 
 2. **百度地图 AK(注意是两个!)**
@@ -50,7 +50,7 @@
 AL_BAILIAN_API_KEY=sk-xxx
 AL_BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ORCHESTRATOR_MODEL_NAME=qwen3.7-max-2026-06-08
-TECHNICAL_MODEL_NAME=glm-5.2
+TECHNICAL_MODEL_NAME=qwen3.8-max-0902
 SERVICE_MODEL_NAME=deepseek-v4-flash-0731
 # 数据库
 MYSQL_HOST=localhost / MYSQL_PORT=3306 / MYSQL_USER=root / MYSQL_PASSWORD=xxx / MYSQL_DATABASE=its
@@ -178,7 +178,7 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 
 ### 3.4 生成与 API
 
-- `query_service.py`:检索片段拼 Prompt → glm-5.2 生成回答,**提示词写明身份"联想智能技术助手"**(不要写"多智能体系统"等内部术语,会泄露给用户)
+- `query_service.py`:检索片段拼 Prompt → qwen3.7-max 生成回答,**提示词写明身份"联想智能技术助手"**(不要写"多智能体系统"等内部术语,会泄露给用户)
 - FastAPI 暴露:`POST /query`(RAG 问答)、`POST /upload`(文档上传,**先查同名文档是否存在**,存在则返回覆盖更新提示)、`GET /health`(供 Docker healthcheck,**必须真实存在**,httpx 对 404 不报错会导致健康检查假绿)
 - **平稳退化**:embedding API 异常时自动退化为纯关键词检索,服务不 503
 
@@ -197,9 +197,9 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 | Agent | 模型 | 理由 |
 |-------|------|------|
 | orchestrator(调度) | qwen3.7-max | 意图识别要准,但任务简单;用强模型降低误路由 |
-| technical(技术专家) | glm-5.2 | 需要 Function Calling 稳定(绑知识库+搜索工具) |
+| technical(技术专家) | qwen3.8-max-0902 | Function Calling 稳定(绑知识库+搜索工具);原 glm-5.2 额度耗尽后切换 |
 | service(服务专家) | deepseek-v4-flash | 任务是短查询+工具调用,flash 快且便宜 |
-| 知识库 RAG 生成 | glm-5.2 | 与技术专家共用,长文档生成质量好 |
+| 知识库 RAG 生成 | qwen3.7-max-2026-06-08 | 原 glm-5.2 额度耗尽后切换 |
 
 ### 4.2 意图网关三分支(main.py,不走模型的规则路由)
 
@@ -218,14 +218,16 @@ def classify_intent(question: str) -> str:
 - orchestrator 提示词定义**何时交接**(4 类故障关键词清单:硬件15+/软件12+/网络6+/资讯4+;判定原则:口语化描述设备异常一律交接)与**何时不交接**(闲聊、问身份)
 - **会话历史需保留调度者自己的交接记录**,只过滤子专家的工具调用——过度过滤会导致调度者多轮后忘记处理逻辑
 
-### 4.4 glm-5.2 的 tool_stream 适配(重大坑)
+### 4.4 流式工具调用的 tool_stream 适配(重大坑,glm-5.2 时代发现)
 
 ```python
-# openai_client.py
+# technical_agent.py
 # glm-5.2 走 OpenAI 兼容接口时,流式模式下默认不返回 tool_calls(Function Calling 静默失败!
 # 表现:模型不调工具直接编答案)。必须通过 extra_body 注入:
 extra_body = {"tool_stream": True}
 ```
+
+> 现状注(2026-09-03):技术专家已切 qwen3.8-max(忽略该参数,无害),注入保留作 glm 系列兼容;接入任何新模型先跑 Function Calling 兼容性验证(test_model_compat.py)
 
 ### 4.5 会话与运行
 
@@ -399,7 +401,7 @@ docker stop its-main-backend its-knowledge-api   # compose 会顺带起后端容
 | # | 坑 | 一句话解法 |
 |---|----|-----------|
 | 1 | passlib 1.7.4 + bcrypt≥4.1 → 注册500 | 锁 `bcrypt==4.0.1` |
-| 2 | glm-5.2 流式不返回 tool_calls | openai_client extra_body 注入 `tool_stream: True` |
+| 2 | glm 系列流式不返回 tool_calls | extra_body 注入 `tool_stream: True`(现注入在 technical_agent.py ModelSettings;qwen 系列忽略该参数) |
 | 3 | 自定义 MCP 类 → Max turns exceeded | 补 `use_structured_content=False` 属性 |
 | 4 | 百炼 MCP:SSE 废弃/新协议500 | 自研 httpx POST 客户端,协议锁 `2024-11-05` |
 | 5 | 提示词里写"禁止调 X"反而调 X | 提示词不出现未注入工具名 |

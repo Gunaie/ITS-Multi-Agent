@@ -3,7 +3,7 @@ import logging
 import aiofiles
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from services.ingestion.ingestion_processor import IngestionProcessor
-from schemas.schema import UploadResponse, QueryResponse, QueryRequest
+from schemas.schema import UploadResponse, QueryResponse, QueryRequest, QueryEvalResponse, ContextItem
 from services.retrieval_service import RetrievalService
 from services.query_service import QueryService
 from config.settings import settings
@@ -98,4 +98,46 @@ async def query(request: QueryRequest):
         )
     except Exception as e:
         logger.error(f"调用查询知识库服务失败:原因:{str(e)}")
+        raise HTTPException(status_code=500, detail=f"服务内部出现异常: {str(e)}")
+
+
+@router.post("/query_eval", response_model=QueryEvalResponse, summary="评测专用查询(返回检索上下文)")
+async def query_eval(request: QueryRequest):
+    """
+    评测专用接口：检索+生成流程与 /query 完全一致，但额外返回检索到的 contexts，
+    供 RAG 质量评测（忠实度/上下文精度/上下文召回等 LLM-as-judge 指标）使用。
+    生产环境 /query 不受影响。
+    """
+    try:
+        user_question = request.question
+        if not user_question:
+            raise HTTPException(status_code=400, detail="查询问题不能为空")
+
+        # 1. 检索（与 /query 同一 retrieval_service，Top4 Document）
+        retrieval_context = await retrieval_service.retrieval(user_question)
+
+        # 2. 生成答案
+        answer = await query_service.generate_answer(user_question, retrieval_context)
+
+        # 3. 映射检索文档为 contexts（清理"文档来源:"前缀，与 generate_answer 内逻辑一致）
+        contexts = []
+        for doc in retrieval_context:
+            content = doc.page_content
+            if content.startswith("文档来源:"):
+                parts = content.split("\n", 1)
+                content = parts[1].strip() if len(parts) > 1 else ""
+            contexts.append(ContextItem(
+                title=doc.metadata.get("title", "Unknown"),
+                content=content.strip()
+            ))
+
+        return QueryEvalResponse(
+            question=user_question,
+            answer=answer,
+            contexts=contexts
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"评测查询接口失败:原因:{str(e)}")
         raise HTTPException(status_code=500, detail=f"服务内部出现异常: {str(e)}")

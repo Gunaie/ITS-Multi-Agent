@@ -24,7 +24,7 @@
 
 **Q5: 说说 RAG 的原理,项目里怎么用的?**
 
-**A**: 检索增强生成 = 先检索后生成,用真实文档约束模型输出,降低幻觉。本项目:用户技术问题 → ChromaDB 向量检索 + Jieba 标题检索双路召回 → 去重重排 → 片段拼入 Prompt → glm-5.2 生成回答,回答标注来源文档。知识库是独立的 FastAPI 微服务(backend/knowledge),主后端通过 HTTP 调用。
+**A**: 检索增强生成 = 先检索后生成,用真实文档约束模型输出,降低幻觉。本项目:用户技术问题 → ChromaDB 向量检索 + Jieba 标题检索双路召回 → 去重重排 → 片段拼入 Prompt → qwen3.7-max 生成回答,回答标注来源文档。知识库是独立的 FastAPI 微服务(backend/knowledge),主后端通过 HTTP 调用。
 
 **Q6: MySQL 里有哪些表?为什么这么设计?**
 
@@ -52,7 +52,7 @@
 
 **Q10: 为什么用三个不同模型?一个不行吗?**
 
-**A**: 成本/能力按角色分层:调度要**准**但任务简单→qwen3.7-max 降低误路由;技术专家要**稳定 Function Calling**(绑知识库+搜索工具)→glm-5.2(需 extra_body 注入 tool_stream);服务专家是短查询+工具调用→deepseek-v4-flash 快且便宜。全用一个强模型成本高,全用便宜模型工具调用不稳。**加一个模型不只是加配置**:每个模型的接口行为有差异(如 glm-5.2 的 tool_stream),要做兼容性测试(test_model_compat.py)。
+**A**: 成本/能力按角色分层:调度要**准**但任务简单→qwen3.7-max 降低误路由;技术专家要**稳定 Function Calling**(绑知识库+搜索工具)→qwen3.8-max(初版 glm-5.2 需 extra_body 注入 tool_stream,额度耗尽后切换);服务专家是短查询+工具调用→deepseek-v4-flash 快且便宜。全用一个强模型成本高,全用便宜模型工具调用不稳。**加一个模型不只是加配置**:每个模型的接口行为有差异(如 glm 系列的 tool_stream、qwen3.8 是思考模型带 reasoning_content),要做兼容性测试(test_model_compat.py)。
 
 **Q11: Handoff(任务交接)具体怎么实现的?上下文怎么传?**
 

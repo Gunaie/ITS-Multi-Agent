@@ -1,6 +1,6 @@
 """会话历史摘要压缩模块。
 
-多轮对话历史超阈值时，用 glm-5.2 将旧条目摘要为单条消息，
+多轮对话历史超阈值时，用 LLM（跟随 technical 模型配置）将旧条目摘要为单条消息，
 保留最近几轮原文，防止 LLM 上下文窗口溢出与成本上升。
 """
 import asyncio
@@ -72,7 +72,7 @@ def _build_summary_input(items) -> str:
 
 
 async def _llm_summarize(text_block: str) -> str:
-    """调 glm-5.2 对话历史文本生成摘要。失败时返回空串，由调用方走兜底。"""
+    """调 LLM 对话历史文本生成摘要。失败时返回空串，由调用方走兜底。"""
     if not text_block.strip():
         return ""
     try:
