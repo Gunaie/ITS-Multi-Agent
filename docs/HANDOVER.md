@@ -67,15 +67,13 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 
 ## 6. Git 状态(2026-09-03 交接快照)
 
-- 分支 `main`,远程 origin/main = `84b146c`(2026-09-03,会话历史压缩修复)
+- 分支 `main`,远程 origin/main = `2fd90cc`(2026-09-03,已推送 GitHub)
 - 近 3 个提交:
+  - `2fd90cc` feat(models/eval): glm-5.2 额度耗尽切换 qwen3.8-max + 自建 RAG 质量评测体系(14 文件,含 /query_eval 接口、eval_rag_quality.py、全文档模型分工同步)
   - `84b146c` fix(session): 压缩阈值改为只数对话条目，修复 E2E M场景误触发压缩
   - `6ad0e41` feat(session): 会话历史摘要压缩，防止长对话上下文溢出
-  - `449c536` docs(handover): 补记 Docker 镜像重建+镜像源403修复调试记录
-- ⚠️ **工作区有待提交变更(交接时未 commit)**,均为本轮模型切换+RAG 评测工作,接手后先审阅提交:
-  - 已修改:`settings.py`+`technical_agent.py`(模型切换)、`main.py`+`history_compression.py`(注释中性化)、`backend/knowledge/routers.py`+`schemas/schema.py`(/query_eval 接口)、`README.md`+`.env.example`+`docs/IMPLEMENTATION_GUIDE.md`+`docs/INTERVIEW_QA.md`(模型分工说明)
-  - 新增:`backend/tests/eval_rag_quality.py`(评测脚本)、`docs/RAG_EVAL_REPORT.md`(报告,含无效标注)、`backend/tests/rag_eval_results.json`(结果数据)
-  - 注意:`.env`/`backend/knowledge/.env` 在 .gitignore 中不入库,但两个运行中容器已经 docker cp 同步过新配置
+- **工作区:干净**(本轮模型切换+RAG 评测工作已全部入库)
+- 注意:`.env`/`backend/knowledge/.env` 在 .gitignore 中不入库(含密钥),实际模型值见环境与配置速记表;两个运行中容器已 docker cp 同步新配置,重建镜像时会从宿主机重新 COPY
 
 ## 7. 硬约束(违反会出真实事故,全文背诵)
 
