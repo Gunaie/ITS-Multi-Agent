@@ -254,8 +254,24 @@ def extract_text(obj, include_reasoning=False):
     if not res and not reasoning_attr:
         text = getattr(obj, "text", None) or (obj.get("text") if isinstance(obj, dict) else None)
         if text: res = str(text)
-        
+
     return res
+
+# 运行时注入片段的正则（这些片段随 Runner.run 的 input 自动写入会话历史，仅服务模型使用，
+# 不应出现在前端展示/会话标题中）
+_SYSTEM_CONTEXT_RE = re.compile(r"\s*\[系统上下文:[^\]]*\]")
+_SYSTEM_DIRECTIVE_RE = re.compile(r"\[系统指令\][^\n]*\n?")
+
+def clean_history_text(text: str) -> str:
+    """剔除历史条目中的运行时注入片段（定位上下文尾部块 / 搜索意图指令头部行）。
+
+    在 /sessions/{id} 读取侧清洗可同时覆盖新旧落库数据； compound 的 [系统提示]
+    已在写入侧防双写删除, 此处不再处理。"""
+    if not text:
+        return text
+    cleaned = _SYSTEM_CONTEXT_RE.sub("", text)
+    cleaned = _SYSTEM_DIRECTIVE_RE.sub("", cleaned)
+    return cleaned.strip()
 
 def get_session(session_id: str) -> Session:
     session_data = binary_redis_client.get(f"session:{session_id}")
@@ -489,6 +505,7 @@ def save_session(session_id: str, session: Session, user_id: str = None, app_typ
                         raw_content = first_msg.content
                     
                     content = extract_text(raw_content, include_reasoning=False)
+                    content = clean_history_text(content)  # 标题同样剔除注入片段
                     if content:
                         title = content[:15] + ("..." if len(content) > 15 else "")
                 
@@ -552,8 +569,8 @@ async def get_session_detail(session_id: str, current_user: dict = Depends(get_c
         for item in session.items:
             role = item.get("role")
             raw_content = item.get("content")
-            # 使用全局的 extract_text，包含推理过程
-            content = extract_text(raw_content, include_reasoning=True)
+            # 使用全局的 extract_text，包含推理过程；并剔除运行时注入的系统片段
+            content = clean_history_text(extract_text(raw_content, include_reasoning=True))
             
             if content:
                 history.append({

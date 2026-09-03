@@ -143,7 +143,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import Chat from './views/Chat.vue'
 import { Plus, ChatDotRound, Management, Location, Connection, Menu, ChatLineRound, TopRight, Edit, Delete, UserFilled } from '@element-plus/icons-vue'
 import { login, register, getSessions, deleteSession, updateSessionTitle } from '@/api/app'
@@ -248,6 +248,14 @@ const handleNewChat = () => {
   currentPath.value = '/chat'
 }
 
+// Ctrl/Cmd+K 快捷键新建会话（按钮上标注的 shortcut）
+const onGlobalKeydown = (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key || '').toLowerCase() === 'k') {
+    e.preventDefault()
+    handleNewChat()
+  }
+}
+
 const handleSessionClick = (sid) => {
   currentSessionId.value = sid
   currentPath.value = '/chat'
@@ -290,11 +298,16 @@ const handleLogout = () => {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown)
   if (!isLoggedIn.value) {
     showLogin.value = true
   } else {
     fetchSessionList()
   }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
 
