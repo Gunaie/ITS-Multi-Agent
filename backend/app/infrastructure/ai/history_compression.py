@@ -109,7 +109,15 @@ async def compress_history_if_needed(session) -> None:
     threshold = settings.SESSION_COMPRESS_THRESHOLD
     keep = settings.SESSION_COMPRESS_KEEP_RECENT
 
-    if len(items) <= threshold:
+    # 阈值只数对话条目（user/assistant 文本），不数工具调用/推理过程条目，
+    # 否则 compound 流程的工具调用会让 5 轮对话就膨胀到 24+ 条触发误压缩
+    conv_count = sum(
+        1 for it in items
+        if (_get_field(it, "type") not in _TOOL_TYPES
+            and (_get_field(it, "role") or "") in ("user", "assistant")
+            and _get_field(it, "content"))
+    )
+    if conv_count <= threshold:
         return
 
     old_items = items[:-keep]
