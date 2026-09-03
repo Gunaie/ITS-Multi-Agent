@@ -77,6 +77,16 @@ class Settings(BaseSettings):
         description="通义千问 DashScope Base URL"
     )
 
+    # ==================== 会话历史压缩配置 ====================
+    SESSION_COMPRESS_THRESHOLD: int = Field(
+        default=24,
+        description="会话历史条目数超此值触发摘要压缩（≈12轮对话）"
+    )
+    SESSION_COMPRESS_KEEP_RECENT: int = Field(
+        default=10,
+        description="压缩时保留最近N条原文（5轮user+assistant）"
+    )
+
     # ==================== LangChain / LangSmith 可观测性配置 ====================
     LANGCHAIN_TRACING_V2: str = Field(default="false", description="是否开启 LangSmith 追踪")
     LANGCHAIN_ENDPOINT: Optional[str] = Field(default="https://api.smith.langchain.com", description="LangSmith 端点")

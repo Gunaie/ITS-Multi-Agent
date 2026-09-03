@@ -194,6 +194,7 @@ class ChatResponse(BaseModel):
 from agents.memory import Session
 from infrastructure.database.redis_client import redis_client, binary_redis_client
 from infrastructure.database.session_impl import SimpleSession
+from infrastructure.ai.history_compression import compress_history_if_needed
 import pickle
 import time
 
@@ -417,6 +418,9 @@ async def run_compound_flow(question: str, session, context) -> str:
     根治 temperature=0 下调度者处理复合意图时多轮遗忘/丢半边的问题。
     technical 先跑完拿到诊断; service 跑时强制"必须且只能调用维修站查询工具"。
     """
+    # 会话历史超阈值时压缩（在 stage1 前执行一次，stage2 复用同一 session 无需重复）
+    await compress_history_if_needed(session)
+
     # 阶段1: 技术诊断。附加系统提示: 服务部分由系统自动处理, 不引导用户再问
     tech_input = f"{question}\n\n[系统提示] 维修站查询部分由系统自动处理, 你只需专注技术诊断, 不要引导用户另行查询维修站。"
     logger.info("Compound flow stage 1: Technical Expert")
@@ -642,6 +646,8 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         # 运行编排智能体，传入 session 和 context；意图网关四分支编排
         intent = classify_intent(chat_request.question, session.context)
         logger.info(f"Intent gate: {intent}")
+        # 会话历史超阈值时压缩（防止长对话上下文溢出），safety_chat 不进 Agent 也无害
+        await compress_history_if_needed(session)
         if intent == "safety_chat":
             # 🔒 安全边界：确定性回绝，不进任何 Agent
             safety_text = _safety_chat_reply(chat_request.question)
@@ -756,6 +762,8 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             # 意图网关四分支编排（与 /chat 保持一致）
             intent = classify_intent(chat_request.question, session.context)
             logger.info(f"Intent gate (stream): {intent}")
+            # 会话历史超阈值时压缩（防止长对话上下文溢出）
+            await compress_history_if_needed(session)
             if intent == "safety_chat":
                 # 🔒 安全边界：确定性回复，直接生成一条 SSE 后退出，不启动任何 Agent
                 safety_text = _safety_chat_reply(chat_request.question)
