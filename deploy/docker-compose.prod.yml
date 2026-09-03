@@ -1,0 +1,131 @@
+# 生产部署 compose（服务器用）。
+# 与根 docker-compose.yml 的差异:
+#   1. 全部服务使用本地已构建镜像（image:），服务器不执行 build（内存受限）
+#   2. mysql/redis/knowledge-api/main-backend 一律不映射宿主端口（仅容器网络互通，
+#      杜绝 Redis/MySQL 裸奔公网）
+#   3. 前端入口改为 8000(agent UI)/8100(管理平台)，避开服务器 80/443 上已有的 dify
+#   4. 前端 nginx 代理改用容器名（deploy/nginx-frontend.prod.conf），不再依赖
+#      host.docker.internal
+# 启动: docker-compose -p its -f docker-compose.prod.yml up -d
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: its-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-its_secure_2024}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-its}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - its-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_PASSWORD:-its_secure_2024}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: its-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - its-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  knowledge-api:
+    image: its_multi_agent-knowledge-api:latest
+    container_name: its-knowledge-api
+    restart: unless-stopped
+    volumes:
+      - ./backend/knowledge/chroma_kb1:/app/chroma_kb1
+      - ./backend/knowledge/data:/app/data
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${AL_BAILIAN_API_KEY}
+      - OPENAI_BASE_URL=${AL_BAILIAN_BASE_URL}
+    networks:
+      - its-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  main-backend:
+    image: its_multi_agent-main-backend:latest
+    container_name: its-main-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-its_secure_2024}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-its}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KNOWLEDGE_BASE_URL=http://knowledge-api:8001
+      - BAIDU_MAP_AK=${BAIDU_MAP_AK}
+      - AL_BAILIAN_API_KEY=${AL_BAILIAN_API_KEY}
+      - AL_BAILIAN_BASE_URL=${AL_BAILIAN_BASE_URL}
+      - ORCHESTRATOR_MODEL_NAME=${ORCHESTRATOR_MODEL_NAME}
+      - TECHNICAL_MODEL_NAME=${TECHNICAL_MODEL_NAME}
+      - SERVICE_MODEL_NAME=${SERVICE_MODEL_NAME}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-its-multi-agent}
+    networks:
+      - its-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      knowledge-api:
+        condition: service_started
+
+  frontend:
+    image: its_multi_agent-frontend:latest
+    container_name: its-frontend
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./deploy/nginx-frontend.prod.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - its-network
+    depends_on:
+      - main-backend
+
+  frontend-admin:
+    image: its_multi_agent-frontend-admin:latest
+    container_name: its-frontend-admin
+    restart: unless-stopped
+    ports:
+      - "8100:80"
+    volumes:
+      - ./deploy/nginx-frontend.prod.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - its-network
+    depends_on:
+      - main-backend
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  its-network:
+    driver: bridge

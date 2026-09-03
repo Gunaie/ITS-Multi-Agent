@@ -262,8 +262,11 @@ const handleSessionClick = (sid) => {
 }
 
 const handleGoToKnowledge = () => {
-  const { protocol, hostname } = window.location
-  window.open(`${protocol}//${hostname}:81`, '_blank')
+  // 知识库管理平台地址按当前访问源推导, 避免写死端口
+  // 端口映射: vite 开发 3002->3000 / 本地 docker 80(无端口)->81 / 公网部署 8000->8100
+  const { protocol, hostname, port } = window.location
+  const adminPort = { '3002': '3000', '8000': '8100' }[port] || '81'
+  window.open(`${protocol}//${hostname}:${adminPort}`, '_blank')
 }
 
 const handleAuth = async () => {

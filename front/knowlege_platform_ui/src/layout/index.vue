@@ -7,8 +7,8 @@
         background-color="var(--sidebar-bg)"
         text-color="var(--text-sub)"
         active-text-color="var(--primary-blue)"
-        router
         class="el-menu-vertical"
+        @select="handleMenuSelect"
       >
         <el-menu-item index="/knowledge">
           <el-icon><Files /></el-icon>
@@ -18,7 +18,7 @@
           <el-icon><ChatDotRound /></el-icon>
           <span>智能问答</span>
         </el-menu-item>
-        <el-menu-item index="external-consult" @click="handleGoToConsult">
+        <el-menu-item index="external-consult">
           <el-icon><Service /></el-icon>
           <span>前往咨询平台</span>
           <el-icon class="external-icon"><TopRight /></el-icon>
@@ -85,13 +85,23 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Plus, ChatLineRound, TopRight, Service, Edit, Delete } from '@element-plus/icons-vue'
 import { getSessions, deleteSession, updateSessionTitle } from '@/api/app'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
+const router = useRouter()
 const activeMenu = computed(() => route.path)
+
+// 菜单分发: 内部菜单走 vue-router; 外链项只开窗, 不触发路由(router 模式会 push 不存在的路径导致空白)
+const handleMenuSelect = (index) => {
+  if (index === 'external-consult') {
+    handleGoToConsult()
+  } else {
+    router.push(index)
+  }
+}
 
 const currentSessionId = ref(Math.random().toString(36).substring(7))
 const sessionList = ref([])
@@ -147,7 +157,14 @@ const handleDelete = async (sid) => {
 }
 
 const handleGoToConsult = () => {
-  window.open('http://localhost', '_blank')
+  // 客服端地址按当前访问源推导, 避免写死 localhost(公网部署会跳到访问者本机)
+  // 端口映射: vite 开发 3000->3002 / 本地 docker 81->80 / 公网部署 8100->8000
+  const { protocol, hostname, port } = window.location
+  const agentPort = { '3000': '3002', '81': '80', '8100': '8000' }[port] || '80'
+  const url = agentPort === '80'
+    ? `${protocol}//${hostname}`
+    : `${protocol}//${hostname}:${agentPort}`
+  window.open(url, '_blank')
 }
 
 const fetchSessionList = async () => {
