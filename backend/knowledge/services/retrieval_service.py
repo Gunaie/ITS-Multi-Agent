@@ -2,6 +2,7 @@ import logging
 import jieba
 import re
 import os
+import json
 import asyncio
 from typing import List, Dict, Any, Optional
 
@@ -9,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from common.infrastructure.logging.logger import logger
 
 from langchain_core.documents import Document
+from langchain_openai import ChatOpenAI
 from repositories.vector_store_repository import VectorStoreRepository
 from services.ingestion.ingestion_processor import IngestionProcessor
 from utils.markdown_utils import MarkDownUtils
@@ -31,6 +33,14 @@ class RetrievalService:
         self.chroma_vector = VectorStoreRepository()
         self.spliter = IngestionProcessor()
         self.query_service = QueryService()
+        # LLM 相关性剔除用的快模型（非思考，标题级判别 0.6s 级）
+        self._rerank_llm = ChatOpenAI(
+            model_name=settings.RERANK_MODEL,
+            openai_api_key=settings.API_KEY,
+            openai_api_base=settings.BASE_URL,
+            temperature=0,
+            timeout=30,
+        )
         
         # 加载自定义词典提升技术名词识别率
         dict_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "dict.txt")
@@ -66,7 +76,11 @@ class RetrievalService:
         ROUGHIN_WORD_WEIGHT = 0.7
 
         # 2.遍历mds_metadata(所有md的元数据)
+        # 注意：mds_metadata 是类级共享缓存，必须操作副本写入分数，
+        # 否则并发查询会互相污染 roughing_score（A 问题的分数写进 B 问题的候选）
+        ranked_results = []
         for md_metadata in mds_metadata:
+            md_metadata = dict(md_metadata)
             # 2.1 获取md标题
             md_metadata_title = md_metadata['title']
 
@@ -90,9 +104,10 @@ class RetrievalService:
             roughing_score = word_score * ROUGHIN_WORD_WEIGHT + char_score * (1 - ROUGHIN_WORD_WEIGHT)
 
             md_metadata['roughing_score'] = float(roughing_score)
+            ranked_results.append(md_metadata)
 
         # 3.根据标题的元数据（roughing_score）排序并且留下前 N 个
-        return sorted(mds_metadata, key=lambda x: x['roughing_score'], reverse=True)[:settings.TOP_ROUGH]
+        return sorted(ranked_results, key=lambda x: x['roughing_score'], reverse=True)[:settings.TOP_ROUGH]
 
     async def fine_ranking(self, user_query: str, rough_mds_metadata: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -189,7 +204,117 @@ class RetrievalService:
             if norm_title not in seen_titles:
                 seen_titles.add(norm_title)
                 final_docs.append(doc)
-        return final_docs[:4]
+        final_docs = final_docs[:4]
+
+        # 5. 相似度阈值过滤：剔除弱相关候选，提升检索精度
+        final_docs = self._similarity_filter(final_docs)
+
+        # 6. 产品类目错配守卫：PC 域问题剔除明确属电视/手机/平板等的跨产品文档
+        final_docs = self._product_guard(user_question, final_docs)
+
+        # 7. LLM 相关性剔除：解决主题漂移（相似度无法区分的弱相关文档）
+        return await self._llm_relevance_filter(user_question, final_docs)
+
+    def _similarity_filter(self, docs: List[Document]) -> List[Document]:
+        """
+        相似度阈值过滤：低于 CONTEXT_SIM_THRESHOLD 的候选视为弱相关并剔除。
+        兜底：若全部被过滤则保留得分最高的单条，避免生成环节无上下文可用。
+        """
+        if not docs:
+            return []
+        threshold = settings.CONTEXT_SIM_THRESHOLD
+        relevant = [doc for doc in docs if doc.metadata.get('similarity', 0) >= threshold]
+        if not relevant:
+            logger.warning(f"全部候选低于相似度阈值 {threshold}，兜底保留最高分文档: {docs[0].metadata.get('title')}")
+            relevant = docs[:1]
+        return relevant
+
+    # 产品类目关键词：标题明确命中这些类目、且查询属 PC 域时视为跨产品弱相关文档
+    _PRODUCT_TITLE_KEYWORDS = {
+        "电视": ("电视", "TV"),
+        "手机": ("手机",),
+        "平板": ("平板",),
+        "打印机": ("打印机",),
+        "投影": ("投影",),
+    }
+    # 判定查询属于 PC 域的词汇
+    _PC_QUERY_KEYWORDS = (
+        "笔记本", "电脑", "台式", "一体机", "Windows", "windows", "操作系统",
+        "ThinkPad", "ThinkBook", "小新", "YOGA", "拯救者", "蓝屏", "黑屏", "死机", "开机",
+    )
+
+    def _product_guard(self, user_query: str, docs: List[Document]) -> List[Document]:
+        """
+        产品类目错配守卫（保守策略）：
+        查询属 PC 域时，剔除标题明确属电视/手机/平板/打印机/投影的文档；
+        若过滤后不足 2 条，按分数把被剔除的最高分文档补回，避免生成挨饿。
+        """
+        if not docs:
+            return []
+        query_lower = user_query.lower()
+        query_is_pc = any(kw.lower() in query_lower for kw in self._PC_QUERY_KEYWORDS)
+        if not query_is_pc:
+            return docs
+
+        kept, dropped = [], []
+        for doc in docs:
+            title = doc.metadata.get('title', '')
+            hit_class = next(
+                (class_name for class_name, keywords in self._PRODUCT_TITLE_KEYWORDS.items()
+                 if any(kw in title for kw in keywords)),
+                None,
+            )
+            if hit_class:
+                dropped.append(doc)
+                logger.info(f"产品类目守卫剔除文档(查询属PC域,文档属{hit_class}): {title} "
+                            f"(similarity={doc.metadata.get('similarity', 0):.3f})")
+            else:
+                kept.append(doc)
+
+        if len(kept) < 2 and dropped:
+            rescued = sorted(dropped, key=lambda d: d.metadata.get('similarity', 0), reverse=True)[:2 - len(kept)]
+            for doc in rescued:
+                logger.info(f"产品类目守卫安全阀: 补回最高分被剔除文档 {doc.metadata.get('title')}")
+            kept.extend(rescued)
+        return kept
+
+    async def _llm_relevance_filter(self, user_query: str, docs: List[Document]) -> List[Document]:
+        """
+        LLM 相关性剔除：让快模型判断每个候选标题是否有助于回答问题，只保留相关文档。
+        用于解决主题漂移（如"驱动程序"检索回"花屏/黑屏"文档、相似度分数无法区分的场景）。
+        失败时开放退化（保留全部），保证可用性优先。
+        """
+        if not settings.RERANK_ENABLED or len(docs) <= 1:
+            return docs
+
+        title_list = "\n".join(f"{i}. {doc.metadata.get('title', '')}" for i, doc in enumerate(docs))
+        prompt = (
+            "你是检索相关性判别器。判断每个候选文档的内容是否有助于回答用户问题。\n"
+            f"【用户问题】：{user_query}\n"
+            "【候选文档标题】：\n"
+            f"{title_list}\n"
+            '只输出 JSON，格式：{"relevant": [相关文档编号, ...]}，没有相关文档则输出 {"relevant": []}\n'
+        )
+
+        try:
+            response = await self._rerank_llm.ainvoke(prompt)
+            match = re.search(r'\{.*\}', response.content, re.DOTALL)
+            if not match:
+                logger.warning(f"LLM 相关性判别输出无法解析: {response.content[:100]}，保留全部候选")
+                return docs
+            relevant_ids = set(int(i) for i in json.loads(match.group()).get('relevant', []))
+
+            kept = [doc for i, doc in enumerate(docs) if i in relevant_ids]
+            dropped_titles = [doc.metadata.get('title', '') for i, doc in enumerate(docs) if i not in relevant_ids]
+            if dropped_titles:
+                logger.info(f"LLM 相关性剔除: {dropped_titles}")
+            if not kept:
+                logger.warning("LLM 判定全部候选不相关，兜底保留最高分单条")
+                kept = docs[:1]
+            return kept
+        except Exception as e:
+            logger.warning(f"LLM 相关性剔除失败({e})，保留全部候选")
+            return docs
 
     async def _search_based_vector(self, user_question: str) -> List[Document]:
         """
@@ -304,6 +429,9 @@ class RetrievalService:
                 score_doc.append((doc, similarity[idx]))
 
         sorted_docs = sorted(score_doc, key=lambda x: x[1], reverse=True)
+        # 将相似度分数回写 metadata，便于下游统一按分数做阈值过滤
+        for doc, score in sorted_docs:
+            doc.metadata['similarity'] = float(score)
         return [doc for doc, _ in sorted_docs[:10]]
 
     async def _deal_long_title_content(self, content: str, fine_md_metadata: Dict[str, Any], user_query: str) -> List[Document]:
