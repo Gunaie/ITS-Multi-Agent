@@ -237,11 +237,26 @@ class BailianWebSearchMCP:
         meta: dict | None = None,
     ) -> Any:
         from mcp.types import CallToolResult
+        from common.infrastructure.logging.logger import logger
 
         if self._client is None:
             raise RuntimeError(
                 "MCP server not initialized. Make sure you call `connect()` first."
             )
+
+        arguments = dict(arguments or {})
+        # 时效加固: 百炼 WebSearch 支持 freshness(oneDay/oneWeek/oneMonth/oneYear/noLimit)。
+        # 模型常只传 query 导致返回旧闻(如把2024年内容当今日新闻);按搜索词时效词在搜索引擎
+        # 层面过滤。模型已显式传 freshness 时不覆盖;非搜索工具不动。
+        if "search" in tool_name.lower() and isinstance(arguments.get("query"), str):
+            if not arguments.get("freshness"):
+                q = arguments["query"]
+                if any(k in q for k in ("天气", "股价", "股市", "现在")):
+                    arguments["freshness"] = "oneDay"
+                elif any(k in q for k in ("今天", "今日", "最新", "新闻", "资讯", "发布会", "发布", "近期")):
+                    arguments["freshness"] = "oneWeek"
+                if arguments.get("freshness"):
+                    logger.info(f"WebSearch freshness injected: {arguments['freshness']} query={q[:40]!r}")
 
         self._next_id += 1
         r = await self._client.post(
@@ -251,7 +266,7 @@ class BailianWebSearchMCP:
                 "jsonrpc": "2.0",
                 "id": self._next_id,
                 "method": "tools/call",
-                "params": {"name": tool_name, "arguments": arguments or {}},
+                "params": {"name": tool_name, "arguments": arguments},
             },
         )
         r.raise_for_status()

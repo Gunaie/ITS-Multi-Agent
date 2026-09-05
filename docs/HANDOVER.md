@@ -76,6 +76,14 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
     - **验证(本地容器)**:流式问"今天有什么科技新闻?"→ 工具调用 `['bailian_web_search']`、单前缀、无交接话术、内容为真实搜索;非流式问"帮我搜最新联想发布会"→ 真实返回 2026-09-04 柏林 Lenovo Innovation World 发布会内容
     - **教训**:意图网关"直连"分支必须直连**工具实际拥有者**;任何"让 A 转告 B 调工具"的设计在 temperature=0 + 会话历史可见时都会退化为话术接力
     - **遗留清理已完成**:本地 backends.tar.gz 删除、服务器 sync_tmp/backends.tar 删除、dangling 镜像 prune(回收 32MB)、.gitignore 加 `*.tar`/`*.tar.gz`
+14. ✅ **搜索时效修复(2026-09-05 深夜,#13 后续)**:
+    - **故障现象**:工具已真实调用,但回答把 **2024-06-15 旧闻当"今日"**,还混入"2026年9月科普月预告"等未来事件,结论"今日无重大新闻"
+    - **根因**:模型自身无实时时钟(不知道今天几号);搜索词仅"今天 科技新闻"("今天"是相对词,搜索引擎返回旧闻聚合页);结果未按时效甄别。三层修复:
+      1. **系统时钟注入**:`technical_agent.instructions` 由静态字符串改为 **callable**(agents SDK 0.22 支持 `Callable[[RunContextWrapper, Agent], str]`),每次运行动态追加`[系统时钟] 当前真实日期时间: YYYY年M月D日 星期X HH:MM`,并声明旧闻/未来预告甄别规则——覆盖 search_only 直连、handoff、compound 所有入口,长期运行不陈旧(模块加载时求值静态字符串会过期)
+      2. **提示词(technical_agent.md 第二步)**:搜"今天/今日"资讯时搜索词**必须带当天年月日**(✅`2026年9月5日 科技新闻`);新增"时效甄别"条:晚于当前=未来预告严禁当今日新闻、早于数月=旧闻、当日确无大新闻如实说"今天暂无重大,近期热点包括…"
+      3. **MCP 调用层(mcp_servers.py call_tool)**:百炼 WebSearch 支持 `freshness`(oneDay/oneWeek/oneMonth/oneYear/noLimit),按 query 时效词注入——天气/股价/现在→oneDay,今天/今日/最新/新闻/发布会→oneWeek;模型显式传则不覆盖;日志 `WebSearch freshness injected: oneWeek query=...` 可观测
+    - **验证(本地容器)**:问"今天有什么科技新闻?"→ 工具 bailian_web_search 调用、搜索词自带"2026年9月5日"、freshness=oneWeek 注入;回答 5 条全为当天(湖北日报/东南网/腾讯网等科普月**当日启动**报道),广州活动正确标注"明日(9月6日)"未当今日,无 2024 旧闻,结尾如实"今日无重大新品发布"
+    - **教训**:LLM 无系统时钟概念,任何时效功能必须显式注入当前日期;提示词里写"今天"不如让模型带绝对日期;时效过滤要在搜索引擎层(freshness)和模型甄别层双做
 
 ## 5. 环境与配置速记
 
