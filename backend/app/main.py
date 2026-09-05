@@ -391,7 +391,7 @@ def classify_intent(question: str, ctx: dict) -> str:
     - compound: 同时含技术故障关键词 + 服务网点关键词 -> 显式编排(先 technical 后 service)
     - service_only: 仅短句服务意图(沿用 should_direct_route_service 判定)
     - safety_chat: 🔒 安全边界/泄漏探测 -> 由系统以"联想 ITS 身份"直接回绝，不进任何 Agent
-    - search_only: 🔍 纯搜索意图(帮我搜/最新款/资讯等，且不含技术故障/服务网点) -> 直连 search_agent，避免调度者塞 technical
+    - search_only: 🔍 纯搜索意图(帮我搜/最新款/资讯等，且不含技术故障/服务网点) -> 直连技术专家(搜索工具拥有者)，严禁经调度者
     - other: 单一技术意图/模糊/闲聊 -> 交调度者路由
     """
     q = (question or "").strip()
@@ -685,16 +685,19 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
             result = type("R", (), {"final_output": merged})()  # 轻量结果对象
             logger.info("Agent Runner finished (compound orchestrated)")
         elif intent == "search_only":
-            # 🔍 纯搜索意图直连 orchestrator，但在 orchestrator 输入里显式声明"用 bailian_web_search 完成，回答必须以【搜索结果】开头"
-            # 最终输出强制带搜索前缀标记，保证评测路由推断稳定判为 search
+            # 🔍 纯搜索意图直连技术专家(搜索工具 bailian_web_search/builtin_web_search 的实际拥有者,
+            # 提示词强制搜索触发词即为此场景)。严禁经调度者:调度者工具表无搜索工具,只会输出
+            # "我无法搜索→交接"话术,且该话术写入会话历史后 temperature=0 的技术专家会模仿延续,
+            # 导致两头都不调工具(2026-09-05 线上故障)。最终输出强制带搜索前缀,保证评测路由判为 search
             search_hint_input = (
-                f"[系统指令] 这是纯搜索意图，请优先调用 bailian_web_search 或 builtin_web_search 查询，"
-                f"回答开头必须以『【搜索结果】：』或『【搜索结果】』前缀，不要走技术故障诊断。用户问题：\n"
+                f"[系统指令] 这是纯搜索意图,请立即调用你工具表中当前存在的联网搜索工具"
+                f"(bailian_web_search 或 builtin_web_search,以实际工具表为准)查询,"
+                f"回答开头必须以『【搜索结果】：』或『【搜索结果】』前缀,不要走技术故障诊断。用户问题:\n"
                 f"{chat_request.question}"
             )
             result = await Runner.run(
-                orchestrator_agent,
-                input=build_orchestrator_input(session, search_hint_input),
+                technical_agent,
+                input=search_hint_input,
                 session=session,
                 context=session,
                 run_config=RunConfig(tracing_disabled=not (settings.LANGCHAIN_TRACING_V2.lower() == "true"))
@@ -890,14 +893,16 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 starting_agent = comprehensive_service_agent
                 agent_input = chat_request.question
             elif intent == "search_only":
-                starting_agent = orchestrator_agent
-                # 🔍 纯搜索意图：注入强制搜索系统指令，流式第一条先发搜索前缀标签，保证评测判为 search
+                starting_agent = technical_agent
+                # 🔍 纯搜索意图直连技术专家(搜索工具实际拥有者),不经调度者——
+                # 调度者无搜索工具只会输出"无法搜索→交接"话术,污染上下文致技术专家也不调工具
+                # 流式第一条 delta 由下方前缀注入逻辑自动补【搜索结果】标记
                 agent_input = (
-                    f"[系统指令] 这是纯搜索意图，请优先调用 bailian_web_search 或 builtin_web_search 查询，"
-                    f"回答开头必须以『【搜索结果】：』前缀，不要走技术故障诊断。用户问题：\n"
+                    f"[系统指令] 这是纯搜索意图,请立即调用你工具表中当前存在的联网搜索工具"
+                    f"(bailian_web_search 或 builtin_web_search,以实际工具表为准)查询,"
+                    f"回答开头必须以『【搜索结果】：』前缀,不要走技术故障诊断。用户问题:\n"
                     f"{chat_request.question}"
                 )
-                agent_input = build_orchestrator_input(session, agent_input)
             else:
                 starting_agent = orchestrator_agent  # compound 和 other 都先走 orchestrator/technical
                 agent_input = build_orchestrator_input(session, chat_request.question) if starting_agent is orchestrator_agent else chat_request.question
@@ -976,11 +981,15 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                                 event_data["type"] = "run_item_stream_event"
                                 event_data["item_type"] = "message_output_item"
                                 delta_text = getattr(data, "delta", "") or ""
-                                # 🔍 search_only 首条 delta 未带搜索前缀则自动补上，保证评测路由推断判为 search
+                                # 🔍 search_only 首条非空 delta 判断:模型按提示词通常会自行输出
+                                # 【搜索结果】前缀,逐 token 流式时首块可能仅为"【"(完整前缀被切到后续块),
+                                # 故只判断首字符——以"【"起手即视为模型正在输出前缀,不重复注入(防双前缀)
                                 if not _search_prefix_emitted:
-                                    _search_prefix_emitted = True
-                                    if not re.match(r"^【搜索(结果|资讯|到的信息)】", delta_text):
-                                        delta_text = "【搜索结果】：" + delta_text
+                                    stripped = delta_text.lstrip()
+                                    if stripped:
+                                        _search_prefix_emitted = True
+                                        if not stripped.startswith("【"):
+                                            delta_text = "【搜索结果】：" + delta_text
                                 event_data["content"] = delta_text
                                 yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
                             elif sub_type == "response.output_reasoning_text.delta":

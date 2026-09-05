@@ -6,8 +6,9 @@ from common.infrastructure.logging.logger import logger
 @function_tool
 async def builtin_web_search(query: str) -> str:
     """
-    【降级兜底，能力有限】本地搜索工具：仅在主搜索工具 bailian_web_search 调用报错
-    或返回无效结果后才可使用。可能返回过时信息或占位提示，不保证实时性。
+    【降级兜底，能力有限】本地搜索工具：当你的工具表中没有 bailian_web_search（MCP 主搜索未连接），
+    或 bailian_web_search 调用报错、返回无效结果时，直接使用本工具。可能返回过时信息或占位提示，
+    不保证实时性，但严禁在它可用时口头声称"无法联网搜索"而不调用。
 
     Args:
         query: 搜索关键词

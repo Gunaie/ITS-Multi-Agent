@@ -68,6 +68,14 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
     - **同步方式纠正**:09-05 白天服务器是 `docker cp main.py + cp .env` 热修(容器重建即丢);晚已改为镜像持久化——本地 `docker save` 双后端→gzip(3.1GB→616MB)→scp→服务器 load→`docker compose -f docker-compose.prod.yml up -d --force-recreate main-backend knowledge-api`;冒烟:容器内 health 200/200、公网 8000/8100 200、`/api/health` 200、`/app/openapi.json` 200;传输包 MD5 两端一致 `0b41ad29...`
     - **新硬坑:`docker save -o x.tar` 产物本身就是 tar,严禁再 `tar -czf x.tar.gz x.tar` 套娃**——服务器 `docker load` 报 `unrecognized image format`(解出的内层才是镜像 tar);解套:外层 `mv` 改名后 `tar -xf` 提内层再 load。另:本地 Docker Desktop 用 containerd 存储(`io.containerd.snapshotter.v1`),`docker save` 输出 OCI 格式(blobs/sha256 无 manifest.json),服务器 docker 29.x 可正常 load
     - **待清理**(稳定 1-2 天后):本地 `backends.tar.gz`(616MB,已加 .gitignore)、服务器 `/opt/its/sync_tmp/backends.tar`(3.1GB)、服务器 dangling 旧镜像(`docker image prune`)
+13. ✅ **search_only 路由修复 + 遗留清理(2026-09-05 深夜)**:
+    - **故障现象**:用户问"今天有什么科技新闻?",回复两段【搜索结果】全是拒绝话术——调度者"我无法直接网络搜索,交接技术专家",技术专家接手后也"无法调用联网搜索工具",零工具调用
+    - **根因**:`search_only` 分支直连 **orchestrator,但调度者工具表只有两个 handoff、没有任何搜索工具**;它只能输出"无法搜索→交接"话术并 handoff。该话术写入会话历史后,**temperature=0 的技术专家模仿前任 assistant 口径**(硬约束#5 的变体),有 bailian_web_search MCP 也不调,直接口头降级。服务器日志铁证:handoff 后 technical `tools=['query_knowledge'], mcp_servers=['search_mac_client']` 完全正常,但无任何工具调用日志
+    - **修复(main.py 两处 + web_search.py)**:`/chat` 与 `/chat_stream` 的 search_only 分支改为**直连 technical_agent**(搜索工具 bailian_web_search/builtin_web_search 的实际拥有者,提示词"强制搜索触发词"一节本就为此场景写,示例原文即"今天有什么科技新闻?");输入指令改为"调用你工具表中当前存在的联网搜索工具(以实际工具表为准)"。builtin_web_search docstring 加固:原写"仅在主工具报错后才可使用"→ MCP 未连接时工具表只有 builtin,模型不敢调;改为"工具表中没有 bailian_web_search 时直接使用,严禁口头声称无法搜索而不调用"
+    - **附带修复双前缀**:流式前缀注入原对首 delta 做 `^【搜索结果】` 完整匹配,逐 token 时首块可能仅为"【"→ 匹配失败重复注入,产出 `【搜索结果】:【搜索结果】:`;改为首个**非空** delta 只判首字符"【"(模型自行输出前缀中则不注入)
+    - **验证(本地容器)**:流式问"今天有什么科技新闻?"→ 工具调用 `['bailian_web_search']`、单前缀、无交接话术、内容为真实搜索;非流式问"帮我搜最新联想发布会"→ 真实返回 2026-09-04 柏林 Lenovo Innovation World 发布会内容
+    - **教训**:意图网关"直连"分支必须直连**工具实际拥有者**;任何"让 A 转告 B 调工具"的设计在 temperature=0 + 会话历史可见时都会退化为话术接力
+    - **遗留清理已完成**:本地 backends.tar.gz 删除、服务器 sync_tmp/backends.tar 删除、dangling 镜像 prune(回收 32MB)、.gitignore 加 `*.tar`/`*.tar.gz`
 
 ## 5. 环境与配置速记
 
