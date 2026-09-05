@@ -11,15 +11,19 @@ from infrastructure.tools.local.web_search import builtin_web_search
 from infrastructure.tools.mcp.mcp_servers import search_mac_client
 from agents import Agent, ModelSettings, RunContextWrapper
 from agents import Runner,RunConfig
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# 容器(slim 镜像)系统时区为 UTC, datetime.now() 在北京时间凌晨 0-8 点会返回"昨天"日期;
+# 显式 UTC+8 且不依赖 tzdata(slim 镜像无 /usr/share/zoneinfo, ZoneInfo 会抛异常)
+_CST = timezone(timedelta(hours=8))
 
 
 def _technical_instructions(agent: Agent, ctx: RunContextWrapper) -> str:
-    """技术专家指令(动态): 静态提示词 + 每次运行时求值的系统时钟。
+    """技术专家指令(动态): 静态提示词 + 每次运行时求值的系统时钟(北京时间)。
     模型自身无实时时钟, 不注入日期会把搜索结果中的旧日期(如2024年)误当"今日",
     或把未来活动预告当今日新闻(2026-09-05 线上故障)。callable 形式保证长期运行不陈旧。"""
     base = load_prompt("technical_agent")
-    now = datetime.now()
+    now = datetime.now(_CST)
     weekdays = "一二三四五六日"
     clock = (
         f"\n\n[系统时钟] 当前真实日期时间: {now.year}年{now.month}月{now.day}日 "

@@ -84,6 +84,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
       3. **MCP 调用层(mcp_servers.py call_tool)**:百炼 WebSearch 支持 `freshness`(oneDay/oneWeek/oneMonth/oneYear/noLimit),按 query 时效词注入——天气/股价/现在→oneDay,今天/今日/最新/新闻/发布会→oneWeek;模型显式传则不覆盖;日志 `WebSearch freshness injected: oneWeek query=...` 可观测
     - **验证(本地容器)**:问"今天有什么科技新闻?"→ 工具 bailian_web_search 调用、搜索词自带"2026年9月5日"、freshness=oneWeek 注入;回答 5 条全为当天(湖北日报/东南网/腾讯网等科普月**当日启动**报道),广州活动正确标注"明日(9月6日)"未当今日,无 2024 旧闻,结尾如实"今日无重大新品发布"
     - **教训**:LLM 无系统时钟概念,任何时效功能必须显式注入当前日期;提示词里写"今天"不如让模型带绝对日期;时效过滤要在搜索引擎层(freshness)和模型甄别层双做
+    - **时区坑(同轮修复)**:python:3.11-slim 容器系统时区为 UTC(服务器日志 14:36 vs 北京 22:36),`datetime.now()` 在北京时间凌晨 0-8 点会注入"昨天"日期;`ZoneInfo("Asia/Shanghai")` 又依赖 tzdata(slim 镜像无 /usr/share/zoneinfo 会抛 ZoneInfoNotFoundError)。解法:`timezone(timedelta(hours=8))` 显式 UTC+8,零依赖
 
 ## 5. 环境与配置速记
 
