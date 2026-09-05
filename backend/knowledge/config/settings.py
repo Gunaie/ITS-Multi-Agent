@@ -33,7 +33,7 @@ class Settings(BaseCommonSettings):
     CONTEXT_SIM_THRESHOLD: float = float(os.environ.get("CONTEXT_SIM_THRESHOLD", "0.35"))
     # LLM 相关性剔除（主题漂移兜底）：RERANK_MODEL 用非思考快模型
     RERANK_ENABLED: bool = os.environ.get("RERANK_ENABLED", "true").lower() == "true"
-    RERANK_MODEL: str = os.environ.get("RERANK_MODEL", "qwen3-max-2026-01-23")
+    RERANK_MODEL: str = os.environ.get("RERANK_MODEL", "qwen-plus-2025-09-11")
     
     model_config = SettingsConfigDict(
         # 依次寻找 .env 文件：当前目录 -> knowledge目录 -> backend目录 -> 项目根目录
