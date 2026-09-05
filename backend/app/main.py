@@ -760,6 +760,33 @@ async def chat_knowledge(request: Request, chat_request: ChatRequest, current_us
 async def health_check():
     return {"status": "healthy"}
 
+async def _stream_agent_deltas(agent, agent_input, session):
+    """精简流式 helper: 只转发文本/思考 delta, 供 compound 两段编排复用。
+
+    与通用单流循环的差异: 不透传 tool 事件/agent 切换事件(前端核心消费的是文本 delta),
+    超时由调用方的 asyncio.timeout 控制。yield (kind, text), kind ∈ {content, reasoning}。
+    """
+    stream = Runner.run_streamed(
+        agent,
+        input=agent_input,
+        session=session,
+        context=session,
+        run_config=RunConfig(tracing_disabled=not (settings.LANGCHAIN_TRACING_V2.lower() == "true")),
+    )
+    async for event in stream.stream_events():
+        et = str(event.type)
+        if "." in et:
+            et = et.split(".")[-1]
+        if et != "raw_response_event":
+            continue
+        data = event.data
+        sub_type = getattr(data, "type", "")
+        if sub_type == "response.output_text.delta":
+            yield "content", (getattr(data, "delta", "") or "")
+        elif sub_type == "response.output_reasoning_text.delta":
+            yield "reasoning", (getattr(data, "delta", "") or "")
+
+
 @app.post("/chat_stream")
 async def chat_stream(request: Request, chat_request: ChatRequest, current_user: dict = Depends(get_current_user)):
     """
@@ -788,6 +815,75 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 yield f"data: {json.dumps({'type':'raw_response_event','delta':safety_text})}\n\n"
                 yield f"data: {json.dumps({'type':'finish_reason','finish_reason':'stop'})}\n\n"
                 save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
+                return
+            if intent == "compound":
+                # 复合意图显式编排(流式版, 与 /chat run_compound_flow 语义一致):
+                # stage1 技术专家流式诊断 -> 分隔符 -> stage2 服务专家流式查网点(强制调工具)。
+                # 旧实现仅 starting_agent=orchestrator 依赖自主交接, 实测交接完技术就结束,
+                # 服务部分被调度者用"请再发消息"话术带过(grep 日志无任何网点工具调用)。
+                session.context["service_query_ts"] = time.time()
+                full_reasoning_c = ""
+
+                def _sse(content=None, reasoning=None):
+                    d = {"type": "run_item_stream_event", "item_type": "message_output_item"}
+                    if content is not None:
+                        d["content"] = content
+                    if reasoning is not None:
+                        d["reasoning_content"] = reasoning
+                    return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+
+                try:
+                    tech_input = (
+                        f"{chat_request.question}\n\n[系统提示] 维修站查询部分由系统自动处理, "
+                        f"你只需专注技术诊断, 不要引导用户另行查询维修站。"
+                    )
+                    logger.info("Compound flow (stream) stage 1: Technical Expert")
+                    async with asyncio.timeout(120.0):
+                        async for kind, txt in _stream_agent_deltas(technical_agent, tech_input, session):
+                            if kind == "content":
+                                yield _sse(content=txt)
+                            else:
+                                full_reasoning_c += txt
+                                yield _sse(reasoning=txt)
+
+                    # 防双写: 移除 stage1 内部包装的 user item(含[系统提示]), stage2 会以原始问题再写入
+                    try:
+                        for i in range(len(session.items) - 1, -1, -1):
+                            it = session.items[i]
+                            it_role = it.get("role") if isinstance(it, dict) else getattr(it, "role", None)
+                            it_content = it.get("content", "") if isinstance(it, dict) else getattr(it, "content", "")
+                            if it_role == "user" and "[系统提示]" in str(it_content):
+                                del session.items[i]
+                                logger.info("Compound flow (stream): removed stage-1 internal user item")
+                                break
+                    except Exception as e:
+                        logger.warning(f"Compound stream cleanup failed: {e}")
+
+                    yield _sse(content="\n\n---\n\n附近联想官方维修站查询结果：\n")
+                    logger.info("Compound flow (stream) stage 2: Service Expert (repair stations)")
+                    async with asyncio.timeout(120.0):
+                        async for kind, txt in _stream_agent_deltas(comprehensive_service_agent, chat_request.question, session):
+                            if kind == "content":
+                                yield _sse(content=txt)
+                            else:
+                                full_reasoning_c += txt
+                                yield _sse(reasoning=txt)
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.error("Compound stream timed out")
+                    yield f"data: {json.dumps({'type': 'error', 'message': '响应超时，请稍后重试，或换一种方式描述您的问题。'}, ensure_ascii=False)}\n\n"
+
+                # reasoning 持久化到最后一条 assistant 消息 + 保存会话 + 结束标记
+                if full_reasoning_c and hasattr(session, 'items') and len(session.items) > 0:
+                    last_item = session.items[-1]
+                    if isinstance(last_item, dict) and last_item.get("role") == "assistant":
+                        last_item["reasoning_content"] = full_reasoning_c
+                    elif hasattr(last_item, "role") and getattr(last_item, "role") == "assistant":
+                        try:
+                            setattr(last_item, "reasoning_content", full_reasoning_c)
+                        except Exception:
+                            pass
+                save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
+                yield "data: [DONE]\n\n"
                 return
             if intent == "service_only":
                 session.context["service_query_ts"] = time.time()
