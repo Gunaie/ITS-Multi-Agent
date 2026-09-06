@@ -31,10 +31,10 @@ import httpx
 from config.settings import settings
 
 KB_URL = os.environ.get("KB_EVAL_URL", "http://127.0.0.1:8001")
-# judge 模型可通过环境变量覆盖（默认跟随 technical 模型；当前=qwen3.8-max-0902）
+# judge 模型可通过环境变量覆盖（默认跟随 technical 模型；当前=qwen-plus-2025-09-11）
 # ⚠️ 该模型为思考模型：单次 judge 调用可达 1-2 分钟，超时需放宽；百炼免费额度并发上限低，
 # 大并发会触发限流（ReadTimeout/挂起），评测务必低并发（条目级 ≤2）+ 失败重试。
-JUDGE_MODEL = os.environ.get("RAG_EVAL_JUDGE_MODEL") or settings.TECHNICAL_MODEL_NAME or "qwen3.8-max-0902"
+JUDGE_MODEL = os.environ.get("RAG_EVAL_JUDGE_MODEL") or settings.TECHNICAL_MODEL_NAME or "qwen-plus-2025-09-11"
 
 # =========================================================================
 # 数据集：15 条，覆盖知识库 15 篇故障排查文档
@@ -170,7 +170,7 @@ async def judge_llm(system_prompt: str, user_prompt: str) -> str:
     # 失败重试 3 次（指数退避 2s/4s），吸收网络瞬断/百炼偶发超时
     for attempt in range(3):
         try:
-            # qwen3.8-max 为思考模型，faithfulness 长输出 judge 实测可超 60s，放宽到 180s
+            # judge 用非思考模型，faithfulness 长输出 judge 实测可超 60s，放宽到 180s
             async with _JUDGE_SEM, httpx.AsyncClient(timeout=180.0) as client:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()

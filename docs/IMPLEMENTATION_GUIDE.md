@@ -29,7 +29,7 @@
 
 1. **阿里云百炼** `AL_BAILIAN_API_KEY`
    - 开通百炼平台,创建 API Key
-   - 需要可用模型:`qwen3.7-max`(调度)、`qwen3.8-max-0902`(技术专家)、`deepseek-v4-flash-0731`(服务专家)、`qwen3.7-max-2026-06-08`(知识库RAG生成)、`text-embedding-v3`(向量化)。原 glm-5.2 因百炼免费额度耗尽已于 2026-09-03 弃用
+   - 需要可用模型:`qwen-max`(调度+知识库RAG生成)、`qwen-plus-2025-09-11`(技术专家+检索rerank+会话压缩)、`qwen3.8-flash`(服务专家)、`text-embedding-v4`(向量化)。模型经历多次额度切换,详见 docs/HANDOVER.md
    - OpenAI 兼容接口地址:`https://dashscope.aliyuncs.com/compatible-mode/v1`
 
 2. **百度地图 AK(注意是两个!)**
@@ -49,9 +49,9 @@
 # LLM
 AL_BAILIAN_API_KEY=sk-xxx
 AL_BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-ORCHESTRATOR_MODEL_NAME=qwen3.7-max-2026-06-08
-TECHNICAL_MODEL_NAME=qwen3.8-max-0902
-SERVICE_MODEL_NAME=deepseek-v4-flash-0731
+ORCHESTRATOR_MODEL_NAME=qwen-max
+TECHNICAL_MODEL_NAME=qwen-plus-2025-09-11
+SERVICE_MODEL_NAME=qwen3.8-flash
 # 数据库
 MYSQL_HOST=localhost / MYSQL_PORT=3306 / MYSQL_USER=root / MYSQL_PASSWORD=xxx / MYSQL_DATABASE=its
 REDIS_HOST=localhost / REDIS_PORT=6379
@@ -157,7 +157,7 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 ### 3.2 入库管道 `init_kb.py`
 
 1. 读取全部 .md → 按标题/段落切分 chunk
-2. `text-embedding-v3` 向量化(百炼 embedding 接口)
+2. `text-embedding-v4` 向量化(百炼 embedding 接口)
 3. 写入 ChromaDB(持久化目录 `chroma_kb1/`),metadata 带 title/source
 
 ### 3.3 检索服务(核心调优点)
@@ -196,10 +196,10 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 
 | Agent | 模型 | 理由 |
 |-------|------|------|
-| orchestrator(调度) | qwen3.7-max | 意图识别要准,但任务简单;用强模型降低误路由 |
-| technical(技术专家) | qwen3.8-max-0902 | Function Calling 稳定(绑知识库+搜索工具);原 glm-5.2 额度耗尽后切换 |
-| service(服务专家) | deepseek-v4-flash | 任务是短查询+工具调用,flash 快且便宜 |
-| 知识库 RAG 生成 | qwen3.7-max-2026-06-08 | 原 glm-5.2 额度耗尽后切换 |
+| orchestrator(调度) | qwen-max | 意图识别要准,但任务简单;用强模型降低误路由 |
+| technical(技术专家) | qwen-plus-2025-09-11 | 非思考模型,Function Calling 响应快(绑知识库+搜索工具);经多轮额度切换后选定 |
+| service(服务专家) | qwen3.8-flash | 任务是短查询+工具调用,flash 快且便宜 |
+| 知识库 RAG 生成 | qwen-max | 与调度共用,减少模型种类 |
 
 ### 4.2 意图网关三分支(main.py,不走模型的规则路由)
 
@@ -227,7 +227,7 @@ def classify_intent(question: str) -> str:
 extra_body = {"tool_stream": True}
 ```
 
-> 现状注(2026-09-03):技术专家已切 qwen3.8-max(忽略该参数,无害),注入保留作 glm 系列兼容;接入任何新模型先跑 Function Calling 兼容性验证(test_model_compat.py)
+> 现状注:技术专家现为 qwen-plus-2025-09-11(忽略 tool_stream 参数,无害),注入保留作历史兼容;接入任何新模型先跑 Function Calling 兼容性验证(test_model_compat.py)
 
 ### 4.5 会话与运行
 
