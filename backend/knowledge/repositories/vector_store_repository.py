@@ -33,11 +33,70 @@ class VectorStoreRepository:
             api_key=settings.API_KEY
         )
 
-        self.vector_database = Chroma(
+        self.vector_database = self._create_vector_database()
+
+    def _create_vector_database(self):
+        """创建 Chroma 持久化客户端实例"""
+        return Chroma(
             persist_directory=settings.VECTOR_STORE_PATH,
             collection_name="its-knowledge",
             embedding_function=self.embedding
         )
+
+    def reload(self):
+        """
+        重建底层 Chroma 客户端句柄并强制从 SQLite 重建 HNSW 索引。
+
+        背景：chromadb 本地 PersistentClient 的 HNSW 段索引在句柄首次加载后
+        长期驻留内存，同进程内其他句柄（入库写入端）新写入的向量对本句柄
+        不可见；容器重启时旧进程 flush 的旧段也可能污染新进程视图（需等待
+        段从 SQLite 异步重建，时机不可控）。
+
+        本方法做三件事：
+        1. clear_system_cache：清除 chromadb 按 persist 路径缓存的 System 单例；
+        2. 删除磁盘上的 HNSW 段文件（保留 chroma.sqlite3 权威数据），
+           强制新建客户端从 SQLite 重建段索引，杜绝"段文件与 SQLite 不一致"；
+        3. 新建 Chroma 句柄。
+        """
+        import os
+        import shutil
+        import glob
+
+        persist_path = settings.VECTOR_STORE_PATH
+
+        # 1. 清除进程内 System 单例缓存
+        try:
+            from chromadb.api.client import SharedSystemClient
+            SharedSystemClient.clear_system_cache()
+        except Exception as e:
+            logger.warning(f"清除 chroma system cache 失败(可忽略): {e}")
+
+        # 2. 删除磁盘 HNSW 段目录，强制从 SQLite 重建索引
+        #    chromadb 的段目录是 UUID 命名，内含 data_level0.bin/header.bin 等；
+        #    SQLite（chroma.sqlite3）是 embedding 的权威存储，删除段不丢数据
+        deleted_segments = 0
+        try:
+            for entry in os.listdir(persist_path):
+                entry_path = os.path.join(persist_path, entry)
+                if os.path.isdir(entry_path):
+                    if os.path.exists(os.path.join(entry_path, "data_level0.bin")):
+                        shutil.rmtree(entry_path)
+                        deleted_segments += 1
+            if deleted_segments:
+                logger.info(f"已删除 {deleted_segments} 个过期 HNSW 段目录，将从 SQLite 重建索引")
+        except Exception as e:
+            logger.error(f"删除 HNSW 段目录失败: {e}")
+
+        # 3. 新建 Chroma 句柄（会自动从 SQLite 重建段索引）
+        self.vector_database = self._create_vector_database()
+
+        # 触发一次轻量计数，确保段索引重建完成再返回
+        try:
+            self.vector_database._collection.count()
+        except Exception as e:
+            logger.warning(f"reload 后 count 触发失败(可忽略): {e}")
+
+        logger.info("向量库 Chroma 句柄已重建，检索视图已刷新")
 
 
     def  add_documents(self,documents:list,batch_size:int=16)->int:

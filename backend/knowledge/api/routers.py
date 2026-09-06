@@ -17,6 +17,24 @@ retrieval_service = RetrievalService()
 query_service = QueryService()
 
 
+def _ingest_and_refresh(file_path: str):
+    """
+    后台入库任务：入库完成后刷新检索端视图。
+    chromadb 本地 PersistentClient 的索引句柄不跨句柄热刷新，
+    若不主动 reload，新上传文档对长驻检索进程不可见（需等待容器重启）。
+    """
+    try:
+        added = ingestion_processor.ingest_file(file_path)
+        if added:
+            # 仅重建检索端句柄：ingestion 句柄与 retrieval 句柄共享同一
+            # SharedSystemClient，重建检索端时 clear_system_cache 会让
+            # 后续所有新句柄都看到最新库状态；ingestion 句柄下次入库时
+            # 也会通过写入端本身看到最新数据。
+            retrieval_service.refresh_after_ingestion()
+    except Exception as e:
+        logger.error(f"后台入库/索引刷新任务失败: {file_path}, 原因: {str(e)}")
+
+
 @router.get("/health", summary="健康检查")
 async def health():
     return {"status": "ok"}
@@ -52,7 +70,8 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         
         # 3. 注册后台任务进行入库处理
         # 这样 API 可以立即返回，不用等待耗时的向量化过程
-        background_tasks.add_task(ingestion_processor.ingest_file, file_path)
+        # 入库完成后会自动刷新检索端向量句柄与标题缓存，保证新文档立即可检索
+        background_tasks.add_task(_ingest_and_refresh, file_path)
 
         if doc_exists:
             return UploadResponse(

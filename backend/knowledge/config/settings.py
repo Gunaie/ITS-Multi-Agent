@@ -31,6 +31,9 @@ class Settings(BaseCommonSettings):
     TOP_FINAL: int = 5
     # 检索精度过滤：候选余弦相似度低于该阈值视为弱相关被剔除（可被环境变量 CONTEXT_SIM_THRESHOLD 覆盖）
     CONTEXT_SIM_THRESHOLD: float = float(os.environ.get("CONTEXT_SIM_THRESHOLD", "0.35"))
+    # 硬地板：全部候选低于阈值时，若最高分仍低于该地板值，判定知识库无相关内容并返回空上下文
+    # （避免兜底保留 0337 这类完全无关的文档误导生成）
+    CONTEXT_SIM_HARD_FLOOR: float = float(os.environ.get("CONTEXT_SIM_HARD_FLOOR", "0.25"))
     # LLM 相关性剔除（主题漂移兜底）：RERANK_MODEL 用非思考快模型
     RERANK_ENABLED: bool = os.environ.get("RERANK_ENABLED", "true").lower() == "true"
     RERANK_MODEL: str = os.environ.get("RERANK_MODEL", "qwen-plus-2025-09-11")

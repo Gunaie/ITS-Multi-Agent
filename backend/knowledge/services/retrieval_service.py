@@ -54,9 +54,34 @@ class RetrievalService:
         now = time.time()
         if not self._metadata_cache or (now - self._last_cache_time) > self.CACHE_TTL:
             logger.info("Refreshing knowledge base metadata cache...")
-            self._metadata_cache = MarkDownUtils.collect_md_metadata(settings.CRAWL_OUTPUT_DIR)
+            # 爬虫文档目录 + 上传文档临时目录都需要扫描，
+            # 否则通过 /upload 上传的文档在标题检索路永久不可见
+            metadata = MarkDownUtils.collect_md_metadata(settings.CRAWL_OUTPUT_DIR)
+            tmp_dir = os.path.abspath(settings.TMP_MD_FOLDER_PATH)
+            crawl_dir = os.path.abspath(settings.CRAWL_OUTPUT_DIR)
+            if tmp_dir != crawl_dir:
+                metadata.extend(MarkDownUtils.collect_md_metadata(tmp_dir))
+            self._metadata_cache = metadata
             self._last_cache_time = now
         return self._metadata_cache
+
+    @classmethod
+    def invalidate_metadata_cache(cls):
+        """失效标题元数据缓存（入库后调用，下次检索强制重新扫描磁盘）"""
+        cls._metadata_cache = None
+        cls._last_cache_time = 0
+
+    def refresh_after_ingestion(self):
+        """
+        入库完成后调用：重建向量库句柄并失效标题缓存，
+        确保新上传文档对双路检索立即可见。
+        """
+        try:
+            self.chroma_vector.reload()
+        except Exception as e:
+            logger.error(f"入库后向量索引刷新失败: {e}")
+        self.invalidate_metadata_cache()
+        logger.info("入库后检索视图刷新完成（向量句柄已重建、标题缓存已失效）")
 
     def rough_ranking(self, user_query, mds_metadata: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -218,14 +243,24 @@ class RetrievalService:
     def _similarity_filter(self, docs: List[Document]) -> List[Document]:
         """
         相似度阈值过滤：低于 CONTEXT_SIM_THRESHOLD 的候选视为弱相关并剔除。
-        兜底：若全部被过滤则保留得分最高的单条，避免生成环节无上下文可用。
+        兜底策略：
+        - 若全部被过滤但最高分 >= CONTEXT_SIM_HARD_FLOOR，保留最高分单条（弱相关总比空上下文好）；
+        - 若最高分也低于硬地板，判定知识库无相关内容，返回空列表，
+          避免把 0337 这类完全无关的文档喂给生成环节造成误导。
         """
         if not docs:
             return []
         threshold = settings.CONTEXT_SIM_THRESHOLD
         relevant = [doc for doc in docs if doc.metadata.get('similarity', 0) >= threshold]
         if not relevant:
-            logger.warning(f"全部候选低于相似度阈值 {threshold}，兜底保留最高分文档: {docs[0].metadata.get('title')}")
+            best_score = docs[0].metadata.get('similarity', 0)
+            if best_score < settings.CONTEXT_SIM_HARD_FLOOR:
+                logger.warning(
+                    f"全部候选低于相似度阈值 {threshold}，且最高分 {best_score:.3f} "
+                    f"低于硬地板 {settings.CONTEXT_SIM_HARD_FLOOR}，判定知识库无相关内容，返回空上下文"
+                )
+                return []
+            logger.warning(f"全部候选低于相似度阈值 {threshold}，兜底保留最高分文档: {docs[0].metadata.get('title')} (score={best_score:.3f})")
             relevant = docs[:1]
         return relevant
 
@@ -309,8 +344,10 @@ class RetrievalService:
             if dropped_titles:
                 logger.info(f"LLM 相关性剔除: {dropped_titles}")
             if not kept:
-                logger.warning("LLM 判定全部候选不相关，兜底保留最高分单条")
-                kept = docs[:1]
+                # LLM 判定全部候选均不相关：返回空上下文，由生成环节明确告知
+                # "知识库无相关方案"，不再兜底保留无关文档误导回答
+                logger.warning("LLM 判定全部候选不相关，返回空上下文")
+                return []
             return kept
         except Exception as e:
             logger.warning(f"LLM 相关性剔除失败({e})，保留全部候选")

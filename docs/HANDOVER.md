@@ -85,6 +85,20 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
     - **验证(本地容器)**:问"今天有什么科技新闻?"→ 工具 bailian_web_search 调用、搜索词自带"2026年9月5日"、freshness=oneWeek 注入;回答 5 条全为当天(湖北日报/东南网/腾讯网等科普月**当日启动**报道),广州活动正确标注"明日(9月6日)"未当今日,无 2024 旧闻,结尾如实"今日无重大新品发布"
     - **教训**:LLM 无系统时钟概念,任何时效功能必须显式注入当前日期;提示词里写"今天"不如让模型带绝对日期;时效过滤要在搜索引擎层(freshness)和模型甄别层双做
     - **时区坑(同轮修复)**:python:3.11-slim 容器系统时区为 UTC(服务器日志 14:36 vs 北京 22:36),`datetime.now()` 在北京时间凌晨 0-8 点会注入"昨天"日期;`ZoneInfo("Asia/Shanghai")` 又依赖 tzdata(slim 镜像无 /usr/share/zoneinfo 会抛 ZoneInfoNotFoundError)。解法:`timezone(timedelta(hours=8))` 显式 UTC+8,零依赖
+15. ✅ **知识库上传后检索不到修复(2026-09-06)**:
+    - **故障现象**:管理平台上传文档 017(键盘失灵)显示"入库成功",但问对应问题时返回"知识库无相关方案"或无关文档(0337-.NET cleanup_tool)
+    - **根因(三层叠加)**:
+      1. **chromadb 段索引不跨句柄热刷新**:入库写入端(ingestion_processor.vector_store)与检索端(retrieval_service.chroma_vector)是两个独立 PersistentClient 句柄,共享同一 System 但 HNSW 段索引在句柄首次加载后长期驻留内存,新写入向量对检索端不可见;容器重启时旧进程 flush 的旧段还可能污染新进程视图
+      2. **标题路盲区**:`MarkDownUtils.collect_md_metadata` 只扫 `CRAWL_OUTPUT_DIR`(/app/data/crawl),上传文档落在 `TMP_MD_FOLDER_PATH`(/app/data/tmp),标题路(粗排+精排)永远看不到上传文档
+      3. **兜底返回垃圾文档**:`_similarity_filter` 与 `_llm_relevance_filter` 在全部分数低于阈值时兜底保留最高分单条(即使是 0337 这类完全无关文档),误导生成
+    - **修复(5 处代码改动,已部署公网)**:
+      1. `VectorStoreRepository.reload()`:入库后重建 Chroma 句柄——`SharedSystemClient.clear_system_cache()` 清进程内 System 单例 → 删除磁盘 HNSW 段目录(保留 chroma.sqlite3 权威数据)→ 新建 Chroma 从 SQLite 重建索引 → `count()` 确认重建完成
+      2. `routers.py _ingest_and_refresh`:后台入库任务完成后调用 `retrieval_service.refresh_after_ingestion()`(内部 `reload()` + 标题缓存失效),实现上传后立即可检索
+      3. `RetrievalService._get_cached_metadata`:扫描目录加入 `TMP_MD_FOLDER_PATH`,新增 `invalidate_metadata_cache()` 类方法供入库后调用
+      4. `_similarity_filter` + `_llm_relevance_filter`:全部分数低于阈值时,若最高分仍低于 `CONTEXT_SIM_HARD_FLOOR=0.25` 则返回空上下文(让生成环节明确告知"知识库无相关方案"),不再兜底无关文档
+      5. `DashScopeEmbeddings._post_with_retry`:对 DNS 解析失败/连接超时/5xx 做 3 次指数退避重试(服务器偶发 DNS 故障曾导致双路全空)
+    - **验证(公网)**:上传 018(HDMI)、019(摄像头)后不重启容器,公网查询立即命中对应文档;017 键盘问题返回 017 文档
+    - **教训**:`repositories.vector_store_repository` 用的是 `logging.getLogger(__name__)` 而非项目统一 logger,`logger.info` 不输出到控制台;调试时用 `print(..., flush=True)`。**PowerShell `Invoke-RestMethod` 对中文 body 默认非 UTF-8 编码**,会导致服务器收到乱码 question、检索返回无关文档——测试中文 API 必须用 `[System.Text.Encoding]::UTF8.GetBytes($body)` 字节数组 + `ContentType "application/json; charset=utf-8"`,或用 curl.exe。此坑曾误导排查方向数小时
 
 ## 5. 环境与配置速记
 

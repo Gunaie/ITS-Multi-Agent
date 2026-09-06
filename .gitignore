@@ -36,6 +36,8 @@ backend/scripts/.lenovo_stations_cache.json
 backend/knowledge/data/tmp/
 # 评测每次运行的产物（不入库）
 eval_results.json
+# 本地测试文档与诊断脚本（不上传）
+test_docs/
 
 # Docker 镜像导出包（三端同步临时产物，禁止入库）
 *.tar

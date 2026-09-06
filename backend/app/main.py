@@ -355,6 +355,7 @@ _MALICIOUS_RE = re.compile(r"编|虚假|编造|伪造|假的|生成.*地址|编.
 _SAFETY_BOUNDARY_RE = re.compile(
     r"(系统提示词|提示词|prompt|内部架构|架构.*什么样|.*是.*模型|调用哪些工具|能调用什么|你的工具|能做什么工具|用了什么模型|模型.*名称)"
     r"|(你是什么AI|你是GPT|你是大模型|你是gpt|告诉我.*内部|内部.*原理|算法.*原理|训练数据|源代码|版权信息)"
+    r"|(你是谁|你叫什么|介绍.*你自己|你是干什么的|你能做什么|你是什么人)"
 )
 # 🔍 强制搜索触发词：一旦命中且非故障类，即使进了 other 分支也让 orchestrator 走 technical 用 bailian_web_search，
 # 但我们在 gateway 层就识别出"纯搜索意图"标为 other（不影响 compound/service_only），
@@ -424,6 +425,9 @@ def _safety_chat_reply(question: str) -> str:
     # 模型/AI 身份追问 / 工具清单
     if any(k in q for k in ("什么模型", "什么AI", "是GPT", "是大模型", "调用哪些工具", "能调用什么", "你的工具", "用了什么模型")):
         return "我是联想 ITS 智能技术助手，面向联想产品提供售后技术诊断与资讯查询服务。如需技术支持，请描述您的设备故障现象，有什么可以帮您？"
+    # 身份/问候类：简洁直接回答，不让 LLM 自由发挥
+    if any(k in q for k in ("你是谁", "你叫什么", "介绍", "你是干什么的", "你能做什么", "你是什么人")):
+        return "您好！我是联想智能技术助手，专注为 ThinkPad、小新、YOGA 笔记本及 ThinkCentre 台式机等联想产品提供售后技术支持。请问您遇到了什么问题？我可以帮您排查设备故障、解答使用疑问或查询附近的联想服务网点。"
     # 兜底（通常不会走到）
     return "抱歉，我无法回答此类问题。我是联想 ITS 智能技术助手，专注于联想产品的技术与售后服务，请问有什么可以帮您？"
 
@@ -733,7 +737,15 @@ async def chat_knowledge(request: Request, chat_request: ChatRequest, current_us
     try:
         user_id = current_user['username']
         session = get_session(chat_request.session_id)
-        
+
+        # 安全边界/身份问候类问题：直接确定性回复，不查知识库（避免知识库无相关内容时 LLM 长篇自由发挥）
+        if _SAFETY_BOUNDARY_RE.search(chat_request.question) or _MALICIOUS_RE.search(chat_request.question):
+            safety_text = _safety_chat_reply(chat_request.question)
+            await session.add_items([{"role": "user", "content": chat_request.question}])
+            await session.add_items([{"role": "assistant", "content": safety_text}])
+            save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
+            return ChatResponse(answer=safety_text)
+
         # 手动添加用户消息到 Session (管理平台不使用 Runner，需要手动维护)
         await session.add_items([{"role": "user", "content": chat_request.question}])
         
