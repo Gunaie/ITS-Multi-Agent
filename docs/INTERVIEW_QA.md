@@ -90,7 +90,7 @@
 
 **Q17: embedding 模型怎么选的?**
 
-**A**: `text-embedding-v3`(阿里百炼)。选型逻辑:与 LLM 同一平台(API Key 通用、计费统一)、中文效果好、接口是 OpenAI 兼容风格;自部署 BGE-M3 需要 GPU 资源,个人项目不划算。设计上把 embedding 封装在知识库服务内部,换模型只动一处。
+**A**: `text-embedding-v4`(阿里百炼)。选型逻辑:与 LLM 同一平台(API Key 通用、计费统一)、中文效果好、接口是 OpenAI 兼容风格;自部署 BGE-M3 需要 GPU 资源,个人项目不划算。设计上把 embedding 封装在知识库服务内部,换模型只动一处。
 
 **Q18: embedding API 挂了怎么办?**
 

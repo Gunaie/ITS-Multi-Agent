@@ -113,7 +113,7 @@ graph TD
 ### 1. 应用后端 (`backend/app`)
 作为系统的“大脑”与“神经中枢”，负责 Agent 编排与业务逻辑。
 - **智能调度专家 (Orchestrator)**: 意图网关三分支编排——纯服务诉求（短句+服务关键词）直连业务服务专家；复合意图（技术+服务）先技术后服务合并回答；技术/闲聊类经调度专家路由，支持 Agent 间任务交接（Handoff）。
-- **三模型分工**: 调度=qwen3.7-max、技术专家=qwen3.8-max（启用 tool_stream 流式工具调用，原 glm-5.2 因百炼额度耗尽已切换）、服务专家=deepseek-v4-flash，知识库RAG生成=qwen3.7-max，按角色择优分配。
+- **三模型分工**: 调度=qwen-max、技术专家=qwen-plus-2025-09-11（非思考模型，工具调用响应快）、服务专家=qwen3.8-flash，知识库RAG生成=qwen-max，embedding=text-embedding-v4，按角色择优分配。
 - **外部能力集成**: 通过 **MCP (Model Context Protocol)** 接入联网搜索，并通过百度地图官方 API 接入地理位置服务。
 - **会话持久化**: 基于 Redis 实现分布式 Session 管理，支持多平台会话隔离。
 
@@ -155,7 +155,7 @@ graph TD
 ## 🛠️ 技术栈
 
 - **语言**: Python 3.11+ (SSE 流式接口使用 asyncio.timeout), JavaScript (Vue 3)
-- **AI 模型**: 三模型分工 (Qwen3.7-Max 调度 / GLM-5.2 技术专家+RAG生成 / DeepSeek-V4-Flash 服务专家) + text-embedding-v3 向量化，统一经阿里百炼 OpenAI 兼容接口接入
+- **AI 模型**: 三模型分工 (qwen-max 调度 / qwen-plus-2025-09-11 技术专家+检索rerank+会话压缩 / qwen3.8-flash 服务专家) + qwen-max RAG生成 + text-embedding-v4 向量化，统一经阿里百炼 OpenAI 兼容接口接入
 - **数据库**: MySQL (用户数据 + 官方授权网点库), Redis (会话数据), ChromaDB (向量数据)
 - **可观测性**: LangSmith (全链路追踪)
 - **评估框架**: Ragas (量化 RAG 效果)

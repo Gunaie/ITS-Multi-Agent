@@ -8,7 +8,7 @@
 - 系统自动判断意图并路由给不同模型:纯服务诉求秒答、技术问题深度排查、复合问题合并回答
 - 全 Docker Compose 一键部署,6 个容器,支持 SSE 流式输出与 7 天会话持久化
 
-技术栈总览:Python 3.11 / FastAPI / agents SDK (OpenAI Agents 风格) / ChromaDB / MySQL / Redis / Vue 3 / Docker Compose / 阿里百炼三模型 + text-embedding-v3 / 百度地图双 AK / LangSmith
+技术栈总览:Python 3.11 / FastAPI / agents SDK (OpenAI Agents 风格) / ChromaDB / MySQL / Redis / Vue 3 / Docker Compose / 阿里百炼三模型 + text-embedding-v4 / 百度地图双 AK / LangSmith
 
 ---
 
@@ -57,7 +57,7 @@ MYSQL_HOST=localhost / MYSQL_PORT=3306 / MYSQL_USER=root / MYSQL_PASSWORD=xxx / 
 REDIS_HOST=localhost / REDIS_PORT=6379
 # 知识库
 KNOWLEDGE_BASE_URL=http://127.0.0.1:8001
-EMBEDDING_MODEL=text-embedding-v3
+EMBEDDING_MODEL=text-embedding-v4
 # 百度双 AK
 BAIDU_MAP_AK=服务端AK
 BAIDU_MAP_AK_BROWSER=浏览器端AK
@@ -178,7 +178,7 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 
 ### 3.4 生成与 API
 
-- `query_service.py`:检索片段拼 Prompt → qwen3.7-max 生成回答,**提示词写明身份"联想智能技术助手"**(不要写"多智能体系统"等内部术语,会泄露给用户)
+- `query_service.py`:检索片段拼 Prompt → qwen-max 生成回答,**提示词写明身份"联想智能技术助手"**(不要写"多智能体系统"等内部术语,会泄露给用户)
 - FastAPI 暴露:`POST /query`(RAG 问答)、`POST /upload`(文档上传,**先查同名文档是否存在**,存在则返回覆盖更新提示)、`GET /health`(供 Docker healthcheck,**必须真实存在**,httpx 对 404 不报错会导致健康检查假绿)
 - **平稳退化**:embedding API 异常时自动退化为纯关键词检索,服务不 503
 

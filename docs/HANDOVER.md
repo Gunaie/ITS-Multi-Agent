@@ -99,6 +99,13 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
       5. `DashScopeEmbeddings._post_with_retry`:对 DNS 解析失败/连接超时/5xx 做 3 次指数退避重试(服务器偶发 DNS 故障曾导致双路全空)
     - **验证(公网)**:上传 018(HDMI)、019(摄像头)后不重启容器,公网查询立即命中对应文档;017 键盘问题返回 017 文档
     - **教训**:`repositories.vector_store_repository` 用的是 `logging.getLogger(__name__)` 而非项目统一 logger,`logger.info` 不输出到控制台;调试时用 `print(..., flush=True)`。**PowerShell `Invoke-RestMethod` 对中文 body 默认非 UTF-8 编码**,会导致服务器收到乱码 question、检索返回无关文档——测试中文 API 必须用 `[System.Text.Encoding]::UTF8.GetBytes($body)` 字节数组 + `ContentType "application/json; charset=utf-8"`,或用 curl.exe。此坑曾误导排查方向数小时
+16. ✅ **身份问候类问题回复优化(2026-09-06,与 #15 同提交)**:
+    - **故障现象**:管理平台 `/chat_knowledge` 端点绕过意图网关直接查知识库,问"你是谁"时 LLM 长篇自由发挥,暴露内部实现细节且回复冗长
+    - **修复(main.py)**:
+      1. `_SAFETY_BOUNDARY_RE` 新增身份问候关键词(你是谁/你叫什么/介绍.*你自己/你是干什么的/你能做什么/你是什么人)
+      2. `_safety_chat_reply` 新增身份类问题简洁回复(一句话说明"联想智能技术助手"角色+能做什么,不暴露模型/工具/架构细节)
+      3. `/chat_knowledge` 端点加入安全边界判断,身份问题直接返回 `_safety_chat_reply` 不再走知识库
+    - **验证**:三端点(`/chat`、`/chat_stream`、`/chat_knowledge`)对身份问题统一返回简洁确定性回复
 
 ## 5. 环境与配置速记
 
