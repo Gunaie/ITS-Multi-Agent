@@ -30,7 +30,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 - **MySQL(service_stations 表):806 条网点 / 75 城市**——本地库(localhost:3306)与容器 its-mysql(宿主**33070**)**已同步一致**(2026-09-02 采完 76 城全量;拉萨 0 条属正常无官方网点)
 - **全国采集完成:76/76 城**(覆盖 75 城,累计 806 条网点;武汉 25/长沙 27/北京 24 等 Top 城市网点齐全)
 - **断点缓存**:`backend/scripts/.lenovo_stations_cache.json`(done_cities=76, records=798;records 含缓存写入前已存在的 8 条 init_db 官方验证数据,故 798≠806,以 MySQL 实际 806 条为准)
-- **知识库向量库**:651 标题全量入库,**embedding=text-embedding-v4**(09-05 换 v4 后本地与服务器均已全量重建;v3/v4 向量空间不兼容,换 embedding 必须重建库)
+- **知识库向量库**:651 标题全量入库,**embedding=text-embedding-v4**(09-05 换 v4 后已全量重建;v3/v4 向量空间不兼容,换 embedding 必须重建库)
 - Redis:会话 JSON 序列化存储
 
 ## 4. 进行中事项(接手后立即要做的)
@@ -50,55 +50,53 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 3. ✅ **Docker 镜像重建 + 镜像源 403 修复(已完成 2026-09-03)**:`its-main-backend` 镜像已于 09-03 01:12 重建成功(含 safety_chat/search_only/radius_km/compound 双写等全部修复)。重建时踩坑:**清华 apt 镜像全站 HTTP 403 + PyPI 返回 versions:none + `python:3.11-slim` 默认 tag 指向 Debian trixie/sid(unstable) 清华无同步**。修复(两个 Dockerfile 同步改,commit `3983463`):基础镜像改 `python:3.11-slim-bookworm` 锁稳定版;apt 删清华 sed 换源回归官方 `deb.debian.org`;pip 改官方 PyPI 主源+阿里云额外索引双兜底,加 `--timeout 120 --retries 3 --prefer-binary`。`knowledge-api` Dockerfile 同步改但镜像未重建(代码未变,跑 09-01 旧镜像 OK)。判断当前 8002 跑的是谁:`Get-NetTCPConnection -LocalPort 8002` 的 OwningProcess 是 wslrelay=容器,python=本地 venv
 4. ✅ **glm-5.2 额度耗尽 → 全链路模型切换(已完成 2026-09-03)**:glm-5.2 百炼免费额度彻底耗尽(评测 judge 403 暴露),切换后分工为 **technical=qwen3.8-max-0902 / RAG生成=qwen3.7-max-2026-06-08**(orchestrator/service 不变)。切换涉及 5 处:根 `.env`、`backend/knowledge/.env`、`settings.py` 默认值、`.env.example`、两个运行中容器(已 `docker cp` .env + restart,同步生效)。**注意:容器内 .env 是构建时 COPY 的,下次重建镜像会从宿主机重新 COPY,宿主机已是新值,无需再手工同步**。兼容性已验证:qwen3.8-max 对 extra_body `tool_stream` 参数忽略不报错;它是思考模型(reasoning_content),与 qwen3.7-max 同系列,agents SDK 兼容。验证结果:`e2e_test_api.py` **16/16 全通过**(含场景C 技术问答走知识库工具、场景D MCP 联网搜索真实天气数据)
 5. ✅ **RAG 质量评测体系搭建+全量评测完成(2026-09-03)**:新增 `backend/tests/eval_rag_quality.py`(15 条数据集 × 4 指标,自建 LLM-as-judge,对齐 Ragas)+知识库 `POST /query_eval` 接口。**有效终版结果(15/15 成功,judge=qwen3-max-2026-01-23)**:检索命中率 100%、faithfulness **0.978**、answer_relevancy 0.967、context_precision 0.583(短板:检索混入弱相关文档)、context_recall 0.987。评测脚本已补齐 judge 与 /query_eval 的 3 次重试(此前注释声称有重试但代码未实现,一次 DNS 瞬断即废 9 条)。踩坑记录:思考模型当 judge 会超时(qwen3.8-max 180s 都不够);主机 DNS 瞬断会同时打挂容器内 DashScope 调用与主机 judge 调用。`docs/RAG_EVAL_REPORT.md` 已覆盖为有效轮
-6. **长期遗留**:域名购买+ICP备案+HTTPS+百度 AK Referer 白名单收紧(当前 `*`,公网部署已完成但域名/HTTPS 未上,见 #10)。~~Ragas 评测集扩充~~(已完成,见 #11)
+6. **长期遗留**:~~Ragas 评测集扩充~~(已完成,见 #11)
 7. **MySQL 端口注意**:宿主端口 **33070**(非原 3307),因为 Windows Hyper-V 把 3307–3406 整个段保留了,`netsh interface ipv4 show excludedportrange protocol=tcp` 可验证
 8. **运行评测注意**:PowerShell 终端需先 `$env:PYTHONIOENCODING='utf-8'`,否则打印 ✅ emoji 触发 GBK `UnicodeEncodeError`
-9. ✅ **检索精度优化(2026-09-03 完成,context_precision 0.583→0.917)**:在 `retrieval_service.py` 落地四层过滤并部署——①`_reranking` 分数回写 metadata;②相似度阈值过滤 `CONTEXT_SIM_THRESHOLD=0.35`(标定:相关 0.57-0.86/弱相关 0.53-0.70 区间重叠,阈值仅作安全网);③产品类目守卫(PC 域问题剔除标题明确属电视/手机/平板/打印机/投影的文档,不足 2 条按分补回);④LLM 相关性剔除 `_llm_relevance_filter`(qwen3-max 标题级 JSON 判别 ~0.6s,RERANK_ENABLED/RERANK_MODEL 可配,治主题漂移如"驱动问题检索回花屏文档",失败开放退化保留全部)。**终版四指标(15/15,judge=qwen3-max)**:命中 100%/faithfulness 0.974/relevance 0.967/**precision 0.917**/recall 0.987,四项验收线(0.75/0.95/0.9/100%)全过。**附带修复两个先于本次改造的生产级 bug**:(a) `rough_ranking` 直接改写类级 `_metadata_cache` 共享 dict,2 路并发查询互相污染粗排分数(WiFi 问题检索回系统重装文档即此因),已改副本操作;(b) 评测脚本并发下"先打标题后打结果"导致日志中标题与问题错位,按内容配对才可见真实检索质量,排查时勿被日志显示错位误导。**部署教训**:多轮 Edit 后 docker cp 前必须 grep 核验宿主机文件完整性(本轮 `import json` 曾被后续编辑覆盖丢失,LLM 剔除全程静默失效,评测白跑一轮)
-10. ✅ **阿里云公网部署完成(2026-09-04)**:服务器 `root@47.102.212.208`(Ubuntu 22.04,2C/3.4G,SSH 仅密钥登录=本机 id_ed25519,**密码登录已于 09-04 禁用**:`/etc/ssh/sshd_config.d/00-hardening.conf` → PasswordAuthentication no + PermitRootLogin prohibit-password,备份在 /root/sshd_config.bak.*)。**22 端口已 ufw 白名单收紧**:仅放行管理员出口 IP 117.150.143.86(家宽动态 IP,变了用 Workbench 改)与阿里云 Workbench 内网 100.64.0.0/10(回滚通道,勿删);80/443/8000/8100 对公网开放(8100=知识库管理平台,ufw+阿里云安全组均已放行)。回滚脚本 `/root/rollback-ssh-hardening.sh`(恢复密码登录+关 ufw)。阿里云安全组 22 仍 0.0.0.0/0(OS 层 ufw 已实际拦截,可选再在控制台收紧作第二层)。**同机跑着用户另一个项目 dify,占 80/443(勿动勿重启)**。因内存紧(dify 占 2.1G)已加 4G swap(`fallocate /swapfile_its`,fstab 已配)。部署形态:入口 `http://47.102.212.208:8000`(agent UI)/`8100`(知识库管理平台,ufw+安全组均已放行);mysql/redis/双后端零宿主端口(防公网裸奔),前端 nginx 用容器名代理(`deploy/nginx-frontend.prod.conf`)。**服务器目录 `/opt/its` 自包含**(服务器连不上 GitHub,部署是纯 scp 交付):`docker-compose.prod.yml`(**必须留在 /opt/its 根**,挂载路径与 env_file 按其所在目录解析)+`deploy/`+`.env`(600)+`backend/knowledge/{chroma_kb1,data}`+`its_db.sql`。镜像更新流程:本地 `docker save` 6 镜像→gzip→scp→`docker load`→重启容器(镜像名需与 `its_multi_agent-*` 一致,compose 只写 image: 不写 build:)。**服务器已装 docker compose v2(`docker compose`,09-04 apt 安装),后续操作一律用 v2;旧 `docker-compose` v1.29 无法处理新 buildx 镜像清单(`KeyError: 'ContainerConfig'`,会停掉旧容器又建不了新的,曾致双前端短暂下线,残留容器名形如 `<id>_its-frontend`,docker rm 后 v2 up 即恢复)**。前端互跳链接(管理平台→客服端、客服端→知识库管理)已改为按当前访问源推导端口(vite 3000/3002、本地 docker 80/81、公网 8100/8000 三套映射),写死 `http://localhost`/`:81` 在公网会跳到访问者本机。**两个公网前端坑(09-04 修复)**:①nginx 默认 `proxy_read_timeout` 60s,RAG 生成(思考模型)实测 50-90s 会 504——两个 nginx conf(prod 与本地 docker)均已显式 `proxy_read/send_timeout 300s`;②管理平台 el-menu 的外链菜单项不能放在 `router` 模式菜单里(点击会 router.push 不存在的 index 把 SPA 带进死路由白屏),已改 `@select` 手动分发(内部 router.push、外链 window.open)。**bind mount 陷阱**:容器挂载单文件后,宿主机用 `mv/scp 覆盖` 会换 inode,运行中容器仍钉在旧 inode(reload 也读旧内容),必须 `cat 新文件 > 挂载文件` 原地写(保留 inode)后容器内 `nginx -s reload`,或 `--force-recreate` 容器。**SPA 缓存陷阱(09-04)**:nginx 默认不给 index.html 发 Cache-Control,浏览器启发式缓存旧 index.html+旧哈希 JS,发布后用户仍跑旧 bundle(症状:已修复的外链跳 localhost、菜单点不动——容器里明明是新代码),排查必看 `curl -sI 站点/` 的 cache-control。已在两个 nginx conf 加策略:index.html `no-cache,no-store,must-revalidate`,`/assets/` 哈希资源 `max-age=31536000,immutable`;排查"线上旧行为"先 grep 容器内 bundle 指纹(window.open/端口映射串)再怀疑缓存。**踩坑**:①PowerShell 管道导出 mysqldump(`| Out-File -Encoding ascii`)会把全部中文吞成 `?`(HEX=3F3F3F),必须容器内落盘+`docker cp` 二进制安全导出;②服务器复杂命令一律写脚本 scp 执行,PowerShell 内联转义必炸(`$(seq)`/`2>/dev/null` 均会被本地 PowerShell 吃掉);③百度/百炼 key 已随根 `.env` 同步到服务器,行为与本地一致。公网冒烟:注册/登录/调度问答/知识库 RAG 全链路 200,中文完好(806 网点 HEX 验证 UTF-8)
-11. ✅ **模型切换 v2 + 评测集扩充 + 服务器同步(2026-09-05 完成)**:
+9. ✅ **检索精度优化(2026-09-03 完成,context_precision 0.583→0.917)**:在 `retrieval_service.py` 落地四层过滤——①`_reranking` 分数回写 metadata;②相似度阈值过滤 `CONTEXT_SIM_THRESHOLD=0.35`(标定:相关 0.57-0.86/弱相关 0.53-0.70 区间重叠,阈值仅作安全网);③产品类目守卫(PC 域问题剔除标题明确属电视/手机/平板/打印机/投影的文档,不足 2 条按分补回);④LLM 相关性剔除 `_llm_relevance_filter`(qwen3-max 标题级 JSON 判别 ~0.6s,RERANK_ENABLED/RERANK_MODEL 可配,治主题漂移如"驱动问题检索回花屏文档",失败开放退化保留全部)。**终版四指标(15/15,judge=qwen3-max)**:命中 100%/faithfulness 0.974/relevance 0.967/**precision 0.917**/recall 0.987,四项验收线(0.75/0.95/0.9/100%)全过。**附带修复两个先于本次改造的生产级 bug**:(a) `rough_ranking` 直接改写类级 `_metadata_cache` 共享 dict,2 路并发查询互相污染粗排分数(WiFi 问题检索回系统重装文档即此因),已改副本操作;(b) 评测脚本并发下"先打标题后打结果"导致日志中标题与问题错位,按内容配对才可见真实检索质量,排查时勿被日志显示错位误导。**教训**:多轮 Edit 后必须 grep 核验文件完整性(本轮 `import json` 曾被后续编辑覆盖丢失,LLM 剔除全程静默失效,评测白跑一轮)
+10. （一项历史事项已按要求整体移除；编号保留以维持下文交叉引用。）
+11. ✅ **模型切换 v2 + 评测集扩充(2026-09-05 完成)**:
     - **触发**:三模型(qwen3.7-max-2026-05-20/qwen3-max-2026-01-23)+text-embedding-v3 额度耗尽(qwen3.8-flash 仍够用不换)。新分工:**orchestrator=qwen-max / technical=judge=rerank=会话压缩=qwen-plus-2025-09-11(非思考,工具调用快) / service=qwen3.8-flash(不变) / RAG生成=qwen-max / embedding=text-embedding-v4**。配置 5 处已同步(根 .env、backend/app/.env、backend/knowledge/.env、两个 settings.py 默认值、.env.example)
-    - **换 embedding=v4 必须重建向量库**(v3/v4 空间不兼容):本地 651 标题全量重 embed;服务器更新用"传库"而非重 embed——本地压缩 chroma_kb1(15.5MB/zip 6.2MB)→scp→服务器停容器换 bind mount 目录→重启,**零额度消耗**
+    - **换 embedding=v4 必须重建向量库**(v3/v4 空间不兼容):本地 651 标题全量重 embed
     - **评测集扩充 15→30 条**(RAG16-30,`eval_rag_quality.py` 内置数据集):30/30 零超时,**命中 100% / faithfulness 0.993 / relevance 0.917 / precision 0.903 / recall 0.993**,四层检索过滤在扩充集上泛化验证通过;`docs/RAG_EVAL_REPORT.md` 与 `rag_eval_results.json` 已覆盖。注意 judge 实际跑的仍是 qwen3-max-2026-01-23(评测启动时根 .env 保存时序差读到旧值,该模型充值后可用,结果有效;后续 judge 跟随 TECHNICAL_MODEL_NAME 即 qwen-plus)
     - E2E 16/16(场景A 首测失败系百度 API 抖动挂起 234s,复测 20s PASS)
-    - **服务器同步方式(09-05)**:scp 5 配置+zip→服务器脚本一次性替换(备份 .env.bak_* 与 chroma_kb1.bak_v3_* 留回滚)→容器内 grep 核验→公网冒烟 4 项(注册/登录//app/chat RAG 54s//api/query 23s)全 PASS。**公网 API 路径约定**:nginx 代理 `/app/`→main-backend:8002、`/api/`→knowledge-api:8001(如公网注册是 `/app/auth/register`,登录是表单编码 `/app/auth/login`)
-    - **新硬坑:PowerShell `Compress-Archive` 打包的 zip 路径分隔符是反斜杠**,Linux 解压变成带 `\` 的怪文件名(chroma_kb1\chroma.sqlite3),服务器解压后"文件数 0";**跨平台传目录必须用 Python zipfile**(正斜杠)重打包
-12. ✅ **复合意图流式修复 + 三端镜像持久化同步(2026-09-05 晚)**:
+    - **新硬坑:PowerShell `Compress-Archive` 打包的 zip 路径分隔符是反斜杠**,跨平台解压会变成带 `\` 的怪文件名(chroma_kb1\chroma.sqlite3);**跨平台打包目录必须用 Python zipfile**(正斜杠)
+12. ✅ **复合意图流式修复(2026-09-05 晚)**:
     - **复合意图流式网点缺失修复(commit ce1673b)**:`/chat_stream` compound 分支原先依赖 orchestrator 自主交接,实测技术专家完成后不调服务专家;重构为**显式两段编排**——技术专家流式诊断→分隔符→服务专家强制查网点,新增 `_stream_agent_deltas` helper 只转发文本/思考 delta;stage1 内部包装的 `[系统提示]` user item 在 stage2 前移除防双写
-    - **三端一致性核验通过**:镜像 ID 两端完全一致(main-backend=`127343cc0e55`、knowledge-api=`03ac1ed6ebfd`、frontend=`ccb900eb5957`、frontend-admin=`c087f7b38b4c`);容器内 main.py 指纹(`_stream_agent_deltas`×3 / `service_query_ts`×4)一致;模型配置 6 处(根 .env、backend/app/.env、knowledge/.env、两个 settings.py 默认值、.env.example)全一致——**注意 .env.example 在 v2 切换时漏改,09-05 晚补齐为 qwen-max/qwen-plus-2025-09-11**
-    - **同步方式纠正**:09-05 白天服务器是 `docker cp main.py + cp .env` 热修(容器重建即丢);晚已改为镜像持久化——本地 `docker save` 双后端→gzip(3.1GB→616MB)→scp→服务器 load→`docker compose -f docker-compose.prod.yml up -d --force-recreate main-backend knowledge-api`;冒烟:容器内 health 200/200、公网 8000/8100 200、`/api/health` 200、`/app/openapi.json` 200;传输包 MD5 两端一致 `0b41ad29...`
-    - **新硬坑:`docker save -o x.tar` 产物本身就是 tar,严禁再 `tar -czf x.tar.gz x.tar` 套娃**——服务器 `docker load` 报 `unrecognized image format`(解出的内层才是镜像 tar);解套:外层 `mv` 改名后 `tar -xf` 提内层再 load。另:本地 Docker Desktop 用 containerd 存储(`io.containerd.snapshotter.v1`),`docker save` 输出 OCI 格式(blobs/sha256 无 manifest.json),服务器 docker 29.x 可正常 load
-    - **待清理**(稳定 1-2 天后):本地 `backends.tar.gz`(616MB,已加 .gitignore)、服务器 `/opt/its/sync_tmp/backends.tar`(3.1GB)、服务器 dangling 旧镜像(`docker image prune`)
+    - **模型配置一致性核验通过**:模型配置 6 处(根 .env、backend/app/.env、knowledge/.env、两个 settings.py 默认值、.env.example)全一致——09-05 晚补齐 .env.example 为 qwen-max/qwen-plus-2025-09-11
+    - **Docker 镜像传输坑**:`docker save -o x.tar` 产物本身就是 tar,严禁再 `tar -czf x.tar.gz x.tar` 套娃;本地 Docker Desktop 用 containerd 存储(`io.containerd.snapshotter.v1`),`docker save` 输出 OCI 格式(blobs/sha256 无 manifest.json)
+    - **待清理**:本地 `backends.tar.gz`(616MB,已加 .gitignore)
 13. ✅ **search_only 路由修复 + 遗留清理(2026-09-05 深夜)**:
     - **故障现象**:用户问"今天有什么科技新闻?",回复两段【搜索结果】全是拒绝话术——调度者"我无法直接网络搜索,交接技术专家",技术专家接手后也"无法调用联网搜索工具",零工具调用
-    - **根因**:`search_only` 分支直连 **orchestrator,但调度者工具表只有两个 handoff、没有任何搜索工具**;它只能输出"无法搜索→交接"话术并 handoff。该话术写入会话历史后,**temperature=0 的技术专家模仿前任 assistant 口径**(硬约束#5 的变体),有 bailian_web_search MCP 也不调,直接口头降级。服务器日志铁证:handoff 后 technical `tools=['query_knowledge'], mcp_servers=['search_mac_client']` 完全正常,但无任何工具调用日志
+    - **根因**:`search_only` 分支直连 **orchestrator,但调度者工具表只有两个 handoff、没有任何搜索工具**;它只能输出"无法搜索→交接"话术并 handoff。该话术写入会话历史后,**temperature=0 的技术专家模仿前任 assistant 口径**(硬约束#5 的变体),有 bailian_web_search MCP 也不调,直接口头降级。日志铁证:handoff 后 technical `tools=['query_knowledge'], mcp_servers=['search_mac_client']` 完全正常,但无任何工具调用日志
     - **修复(main.py 两处 + web_search.py)**:`/chat` 与 `/chat_stream` 的 search_only 分支改为**直连 technical_agent**(搜索工具 bailian_web_search/builtin_web_search 的实际拥有者,提示词"强制搜索触发词"一节本就为此场景写,示例原文即"今天有什么科技新闻?");输入指令改为"调用你工具表中当前存在的联网搜索工具(以实际工具表为准)"。builtin_web_search docstring 加固:原写"仅在主工具报错后才可使用"→ MCP 未连接时工具表只有 builtin,模型不敢调;改为"工具表中没有 bailian_web_search 时直接使用,严禁口头声称无法搜索而不调用"
     - **附带修复双前缀**:流式前缀注入原对首 delta 做 `^【搜索结果】` 完整匹配,逐 token 时首块可能仅为"【"→ 匹配失败重复注入,产出 `【搜索结果】:【搜索结果】:`;改为首个**非空** delta 只判首字符"【"(模型自行输出前缀中则不注入)
-    - **验证(本地容器)**:流式问"今天有什么科技新闻?"→ 工具调用 `['bailian_web_search']`、单前缀、无交接话术、内容为真实搜索;非流式问"帮我搜最新联想发布会"→ 真实返回 2026-09-04 柏林 Lenovo Innovation World 发布会内容
+    - **验证**:流式问"今天有什么科技新闻?"→ 工具调用 `['bailian_web_search']`、单前缀、无交接话术、内容为真实搜索;非流式问"帮我搜最新联想发布会"→ 真实返回 2026-09-04 柏林 Lenovo Innovation World 发布会内容
     - **教训**:意图网关"直连"分支必须直连**工具实际拥有者**;任何"让 A 转告 B 调工具"的设计在 temperature=0 + 会话历史可见时都会退化为话术接力
-    - **遗留清理已完成**:本地 backends.tar.gz 删除、服务器 sync_tmp/backends.tar 删除、dangling 镜像 prune(回收 32MB)、.gitignore 加 `*.tar`/`*.tar.gz`
+    - **遗留清理已完成**:本地 backends.tar.gz 删除、.gitignore 加 `*.tar`/`*.tar.gz`
 14. ✅ **搜索时效修复(2026-09-05 深夜,#13 后续)**:
     - **故障现象**:工具已真实调用,但回答把 **2024-06-15 旧闻当"今日"**,还混入"2026年9月科普月预告"等未来事件,结论"今日无重大新闻"
     - **根因**:模型自身无实时时钟(不知道今天几号);搜索词仅"今天 科技新闻"("今天"是相对词,搜索引擎返回旧闻聚合页);结果未按时效甄别。三层修复:
       1. **系统时钟注入**:`technical_agent.instructions` 由静态字符串改为 **callable**(agents SDK 0.22 支持 `Callable[[RunContextWrapper, Agent], str]`),每次运行动态追加`[系统时钟] 当前真实日期时间: YYYY年M月D日 星期X HH:MM`,并声明旧闻/未来预告甄别规则——覆盖 search_only 直连、handoff、compound 所有入口,长期运行不陈旧(模块加载时求值静态字符串会过期)
       2. **提示词(technical_agent.md 第二步)**:搜"今天/今日"资讯时搜索词**必须带当天年月日**(✅`2026年9月5日 科技新闻`);新增"时效甄别"条:晚于当前=未来预告严禁当今日新闻、早于数月=旧闻、当日确无大新闻如实说"今天暂无重大,近期热点包括…"
       3. **MCP 调用层(mcp_servers.py call_tool)**:百炼 WebSearch 支持 `freshness`(oneDay/oneWeek/oneMonth/oneYear/noLimit),按 query 时效词注入——天气/股价/现在→oneDay,今天/今日/最新/新闻/发布会→oneWeek;模型显式传则不覆盖;日志 `WebSearch freshness injected: oneWeek query=...` 可观测
-    - **验证(本地容器)**:问"今天有什么科技新闻?"→ 工具 bailian_web_search 调用、搜索词自带"2026年9月5日"、freshness=oneWeek 注入;回答 5 条全为当天(湖北日报/东南网/腾讯网等科普月**当日启动**报道),广州活动正确标注"明日(9月6日)"未当今日,无 2024 旧闻,结尾如实"今日无重大新品发布"
+    - **验证**:问"今天有什么科技新闻?"→ 工具 bailian_web_search 调用、搜索词自带"2026年9月5日"、freshness=oneWeek 注入;回答 5 条全为当天(湖北日报/东南网/腾讯网等科普月**当日启动**报道),广州活动正确标注"明日(9月6日)"未当今日,无 2024 旧闻,结尾如实"今日无重大新品发布"
     - **教训**:LLM 无系统时钟概念,任何时效功能必须显式注入当前日期;提示词里写"今天"不如让模型带绝对日期;时效过滤要在搜索引擎层(freshness)和模型甄别层双做
-    - **时区坑(同轮修复)**:python:3.11-slim 容器系统时区为 UTC(服务器日志 14:36 vs 北京 22:36),`datetime.now()` 在北京时间凌晨 0-8 点会注入"昨天"日期;`ZoneInfo("Asia/Shanghai")` 又依赖 tzdata(slim 镜像无 /usr/share/zoneinfo 会抛 ZoneInfoNotFoundError)。解法:`timezone(timedelta(hours=8))` 显式 UTC+8,零依赖
+    - **时区坑(同轮修复)**:python:3.11-slim 容器系统时区为 UTC,`datetime.now()` 在北京时间凌晨 0-8 点会注入"昨天"日期;`ZoneInfo("Asia/Shanghai")` 又依赖 tzdata(slim 镜像无 /usr/share/zoneinfo 会抛 ZoneInfoNotFoundError)。解法:`timezone(timedelta(hours=8))` 显式 UTC+8,零依赖
 15. ✅ **知识库上传后检索不到修复(2026-09-06)**:
     - **故障现象**:管理平台上传文档 017(键盘失灵)显示"入库成功",但问对应问题时返回"知识库无相关方案"或无关文档(0337-.NET cleanup_tool)
     - **根因(三层叠加)**:
-      1. **chromadb 段索引不跨句柄热刷新**:入库写入端(ingestion_processor.vector_store)与检索端(retrieval_service.chroma_vector)是两个独立 PersistentClient 句柄,共享同一 System 但 HNSW 段索引在句柄首次加载后长期驻留内存,新写入向量对检索端不可见;容器重启时旧进程 flush 的旧段还可能污染新进程视图
+      1. **chromadb 段索引不跨句柄热刷新**:入库写入端(ingestion_processor.vector_store)与检索端(retrieval_service.chroma_vector)是两个独立 PersistentClient 句柄,共享同一 System 但 HNSW 段索引在句柄首次加载后长期驻留内存,新写入向量对检索端不可见;进程重启时旧进程 flush 的旧段还可能污染新进程视图
       2. **标题路盲区**:`MarkDownUtils.collect_md_metadata` 只扫 `CRAWL_OUTPUT_DIR`(/app/data/crawl),上传文档落在 `TMP_MD_FOLDER_PATH`(/app/data/tmp),标题路(粗排+精排)永远看不到上传文档
       3. **兜底返回垃圾文档**:`_similarity_filter` 与 `_llm_relevance_filter` 在全部分数低于阈值时兜底保留最高分单条(即使是 0337 这类完全无关文档),误导生成
-    - **修复(5 处代码改动,已部署公网)**:
+    - **修复(5 处代码改动)**:
       1. `VectorStoreRepository.reload()`:入库后重建 Chroma 句柄——`SharedSystemClient.clear_system_cache()` 清进程内 System 单例 → 删除磁盘 HNSW 段目录(保留 chroma.sqlite3 权威数据)→ 新建 Chroma 从 SQLite 重建索引 → `count()` 确认重建完成
       2. `routers.py _ingest_and_refresh`:后台入库任务完成后调用 `retrieval_service.refresh_after_ingestion()`(内部 `reload()` + 标题缓存失效),实现上传后立即可检索
       3. `RetrievalService._get_cached_metadata`:扫描目录加入 `TMP_MD_FOLDER_PATH`,新增 `invalidate_metadata_cache()` 类方法供入库后调用
       4. `_similarity_filter` + `_llm_relevance_filter`:全部分数低于阈值时,若最高分仍低于 `CONTEXT_SIM_HARD_FLOOR=0.25` 则返回空上下文(让生成环节明确告知"知识库无相关方案"),不再兜底无关文档
-      5. `DashScopeEmbeddings._post_with_retry`:对 DNS 解析失败/连接超时/5xx 做 3 次指数退避重试(服务器偶发 DNS 故障曾导致双路全空)
-    - **验证(公网)**:上传 018(HDMI)、019(摄像头)后不重启容器,公网查询立即命中对应文档;017 键盘问题返回 017 文档
-    - **教训**:`repositories.vector_store_repository` 用的是 `logging.getLogger(__name__)` 而非项目统一 logger,`logger.info` 不输出到控制台;调试时用 `print(..., flush=True)`。**PowerShell `Invoke-RestMethod` 对中文 body 默认非 UTF-8 编码**,会导致服务器收到乱码 question、检索返回无关文档——测试中文 API 必须用 `[System.Text.Encoding]::UTF8.GetBytes($body)` 字节数组 + `ContentType "application/json; charset=utf-8"`,或用 curl.exe。此坑曾误导排查方向数小时
+      5. `DashScopeEmbeddings._post_with_retry`:对 DNS 解析失败/连接超时/5xx 做 3 次指数退避重试(偶发 DNS 故障曾导致双路全空)
+    - **验证**:上传 018(HDMI)、019(摄像头)后不重启服务,查询立即命中对应文档;017 键盘问题返回 017 文档
+    - **教训**:`repositories.vector_store_repository` 用的是 `logging.getLogger(__name__)` 而非项目统一 logger,`logger.info` 不输出到控制台;调试时用 `print(..., flush=True)`。**PowerShell `Invoke-RestMethod` 对中文 body 默认非 UTF-8 编码**,会导致收到乱码 question、检索返回无关文档——测试中文 API 必须用 `[System.Text.Encoding]::UTF8.GetBytes($body)` 字节数组 + `ContentType "application/json; charset=utf-8"`,或用 curl.exe。此坑曾误导排查方向数小时
 16. ✅ **身份问候类问题回复优化(2026-09-06,与 #15 同提交)**:
     - **故障现象**:管理平台 `/chat_knowledge` 端点绕过意图网关直接查知识库,问"你是谁"时 LLM 长篇自由发挥,暴露内部实现细节且回复冗长
     - **修复(main.py)**:
@@ -121,7 +119,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 ## 6. Git 状态(2026-09-05 交接快照)
 
 - 分支 `main`,远程基线 `ce1673b`(2026-09-05,compound 流式显式两段编排修复)。09-05 提交内容:模型切换 v2(配置 5 处)、评测集扩充 15→30 条与评测结果、DEMO 视频脚本、compound 流式修复、本 HANDOVER 更新
-- **注意**:`.env`/`backend/app/.env`/`backend/knowledge/.env` 在 .gitignore 中不入库(含密钥),实际模型值见环境与配置速记表;服务器已于 09-05 晚改为**镜像持久化同步**(双后端镜像 ID 与本地一致,重建不丢),`.env` 在镜像构建时 COPY 且 compose env_file 挂载宿主机 `/opt/its/.env`
+- **注意**:`.env`/`backend/app/.env`/`backend/knowledge/.env` 在 .gitignore 中不入库(含密钥),实际模型值见环境与配置速记表
 
 ## 7. 硬约束(违反会出真实事故,全文背诵)
 

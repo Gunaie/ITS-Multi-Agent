@@ -263,8 +263,8 @@ const handleSessionClick = (sid) => {
 
 const handleGoToKnowledge = () => {
   // 管理端地址解析（优先级从高到低）：
-  // 1) 构建期环境变量 VITE_ADMIN_URL 显式指定（临时端口/特殊部署无需改代码）
-  // 2) 按当前访问端口推导对端端口（vite 开发 / 本地 docker / 公网部署）
+  // 1) 构建期环境变量 VITE_ADMIN_URL 显式指定（临时端口无需改代码）
+  // 2) 按当前访问端口推导对端端口（本地开发 / 本地 docker）
   const explicit = import.meta.env.VITE_ADMIN_URL
   if (explicit) {
     window.open(explicit, '_blank')
@@ -276,7 +276,6 @@ const handleGoToKnowledge = () => {
     '': '81',          // 本地 docker：用户端 80 → 管理端 81
     '3002': '3000',    // vite 默认开发端口
     '5173': '5175',    // 3002 落入系统保留段时的备用开发端口
-    '8000': '8100',    // 公网部署示例
   }[port] || '81'
   window.open(`${protocol}//${hostname}:${adminPort}`, '_blank')
 }
