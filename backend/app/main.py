@@ -707,9 +707,12 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         # 会话历史超阈值时压缩（防止长对话上下文溢出），safety_chat 不进 Agent 也无害
         await compress_history_if_needed(session)
         if intent == "safety_chat":
-            # 🔒 安全边界：确定性回绝，不进任何 Agent
-            safety_text = _safety_chat_reply(chat_request.question)
-            result = type("R", (), {"final_output": safety_text})()
+            # 🔒 安全边界：确定性回绝，不进任何 Agent。
+            # 注意：safety 不走 Runner，用户消息不会自动写入 session.items，
+            # 需手动追加，否则 save_session 提取标题时 items 为空导致落为"新对话"。
+            session.items.append({"role": "user", "content": chat_request.question})
+            session.items.append({"role": "assistant", "content": _safety_chat_reply(chat_request.question)})
+            result = type("R", (), {"final_output": _safety_chat_reply(chat_request.question)})()
             logger.info("Intent gate: safety_chat direct reply")
         elif intent == "service_only":
             session.context["service_query_ts"] = time.time()
@@ -872,6 +875,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 # 与前端协议统一：文本须用 run_item_stream_event/message_output_item.content。
                 # 前端不识别 raw_response_event，旧写法会导致安全回绝时助手气泡空白；并补 [DONE] 结束标记。
                 yield f"data: {json.dumps({'type':'run_item_stream_event','item_type':'message_output_item','content':safety_text}, ensure_ascii=False)}\n\n"
+                # safety 不走 Runner，用户消息不会自动写入 session.items，需手动追加，
+                # 否则 save_session 提取标题时 items 为空导致落为"新对话"。
+                session.items.append({"role": "user", "content": chat_request.question})
+                session.items.append({"role": "assistant", "content": safety_text})
                 save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
                 yield "data: [DONE]\n\n"
                 return
