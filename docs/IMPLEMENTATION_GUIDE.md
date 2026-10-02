@@ -83,9 +83,14 @@ its_multi_agent/
 │   │   ├── prompts/            # 三个 agent 的 .md 提示词
 │   │   ├── infrastructure/
 │   │   │   ├── ai/openai_client.py      # 模型客户端封装(extra_body 注入等)
-│   │   │   ├── database/       # init_db.py / session_impl.py / database_pool.py
+│   │   │   ├── ai/history_compression.py # 会话历史摘要压缩(超24条压缩)
+│   │   │   ├── intent_gateway.py        # 五分类意图网关(classify_intent/safety_chat_reply)
+│   │   │   ├── session_manager.py       # 会话持久化(get_session/save_session + 标题提取)
+│   │   │   ├── text_utils.py            # 文本提取与清洗(extract_text/clean_history_text)
+│   │   │   ├── database/       # init_db.py / session_impl.py / database_pool.py / redis_client.py
+│   │   │   ├── support/        # 工单与反馈路由(support_tickets/message_feedback)
 │   │   │   └── tools/
-│   │   │       ├── local/      # baidu_map_tool.py / location_service.py / service_station.py / knowledge_base.py / web_search.py
+│   │   │       ├── local/      # baidu_map_tool.py / location_service.py / service_station.py / knowledge_base.py / web_search.py / escalation_tool.py
 │   │   │       └── mcp/mcp_servers.py   # 自研 MCP 兼容客户端
 │   │   └── Dockerfile
 │   ├── knowledge/              # 知识库微服务(独立 .venv!)
@@ -121,8 +126,8 @@ its_multi_agent/
 
 `backend/app/infrastructure/database/init_db.py` 启动时自动建表:
 
-- **users 表**:id / username / `password_hash` / created_at
-- **service_stations 表**:id / name / address / province / city / **lat / lng(百度 BD-09)** / phone / source / name_addr_hash 等
+- **users 表**:id / username / `hashed_password` / created_at
+- **service_stations 表**:id / name / address / **lat / lng(百度 BD-09)** / phone / brand / city / name_addr_hash 等
 
 两个必踩的坑:
 
@@ -140,11 +145,11 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 
 `session_impl.py` 自定义 `SimpleSession` 实现 agents SDK 的 Session 协议:
 
-- **必须用 JSON 序列化,禁止 pickle**(反序列化安全风险 + 跨进程兼容性)
+- **用 pickle 序列化**(agents SDK 的 Session 对象含 Agent 实例/工具调用记录等复杂结构,JSON 无法直接序列化;`binary_redis_client` 独立客户端处理字节)
 - 除当前会话数据外,用 **ZSet** 维护用户 → 会话列表映射(score=最后活跃时间戳),支撑前端"历史会话"侧栏
 - **关键设计——历史过滤**:`get_items()` 返回历史时**过滤掉工具调用/工具返回条目**,只保留自然语言消息。原因:temperature=0 下模型会模仿会话历史,若调度者在历史中看到子 Agent 的工具调用记录,会尝试调用**自己并没有的工具**导致 500(详见 Q&A)
 
-**验收**:注册/登录接口通过(hash 校验);会话写入 Redis 后用 `redis-cli` 能看到 JSON 结构。
+**验收**:注册/登录接口通过(hash 校验);会话写入 Redis 后用 `redis-cli` 能看到 pickle 序列化的二进制数据。
 
 ---
 
@@ -201,10 +206,12 @@ bcrypt==4.0.1  # passlib 1.7.4 不兼容 bcrypt>=4.1, 勿升级
 | service(服务专家) | qwen3.8-flash | 任务是短查询+工具调用,flash 快且便宜 |
 | 知识库 RAG 生成 | qwen-max | 与调度共用,减少模型种类 |
 
-### 4.2 意图网关三分支(main.py,不走模型的规则路由)
+### 4.2 意图网关五分支(main.py,不走模型的规则路由)
 
 ```python
 def classify_intent(question: str) -> str:
+    # 探测提示词/系统架构/身份盘问/编造地址 → safety_chat(确定性回绝,不进 Agent)
+    # 纯搜索意图(今天有什么新闻/天气/股价) → search_only(直连技术专家,强制搜索前缀)
     # 短句(<=30字) + 服务关键词(维修站/网点/保修/客服电话...) → service_only(直连服务专家,快)
     # 含服务关键词 且 含技术词(黑屏/蓝屏/进水/驱动...) → compound(先技术后服务,合并回答)
     # 其他 → other(走 orchestrator,由模型决定回答或 handoff)
@@ -336,12 +343,12 @@ score = 0.6 * phone_match(电话归一化匹配官方库,最强证据:座机区�
 
 ```text
 backend/tests/
-├── test_service_station_logic.py   # 47 项纯逻辑断言(电话/名称/地址匹配、坐标转换、
+├── test_service_station_logic.py   # 16 项纯逻辑断言(电话/名称/地址匹配、坐标转换、
 │                                   #   去重合并、追问链路),毫秒级零依赖,自研 check() 计数
 ├── smoke_test_station_tool.py      # 工具冒烟:真实 geocode → 并行检索 → 核验 → 距离
-├── e2e_test_api.py                 # 16 项 API E2E:健康/鉴权/会话/四类对话/流式/RAG/故障回放
+├── e2e_test_api.py                 # 26 项 API E2E 断言:健康/鉴权/会话/四类对话/流式/RAG/故障回放
 ├── test_web_search_routing.py      # 路由回归:实时资讯必须走 MCP 主搜索(免地图配额可天天跑)
-├── eval_agent_quality.py           # 25 项质量评测:路由/内容/安全/响应时间
+├── eval_agent_quality.py           # 50 项质量评测:路由/内容/安全/响应时间
 └── test_model_compat.py / test_agents_sdk_glm.py  # 模型兼容性
 ```
 
@@ -350,7 +357,7 @@ LLM 测试的三个特殊设计:
 2. **故障对话回放**——把线上 badcase 固化成 E2E,防复发
 3. **配额预算管理**——百度配额敏感场景每次运行消耗可预估、可拆分
 
-质量评测结果(25 项):路由正确率 84% / 内容完整率 92% / 安全合规 100% / 平均响应 4.24s。
+质量评测结果(50 项):路由正确率 84% / 内容完整率 92% / 安全合规 100% / 平均响应 4.24s。
 
 LangSmith:`LANGCHAIN_TRACING_V2=true` 后全链路可视——哪次路由错了、哪个工具参数传歪了,Trace 里一目了然,**调 Prompt 的第一工具**。
 
@@ -410,7 +417,7 @@ docker stop its-main-backend its-knowledge-api   # compose 会顺带起后端容
 | 8 | PowerShell Invoke-WebRequest 中文变 ??? | 用 httpx 或浏览器测 |
 | 9 | 地理编码跨城错(校区不含城市名) | hint 提取城市传 geocode `city` 参数 + POI 交叉校验 |
 | 10 | scope=2 的 distance 读不到 | 在 POI 顶层不在 detail_info |
-| 11 | Redis 会话用 pickle | 必须 JSON |
+| 11 | Redis 会话用 pickle | agents SDK Session 对象复杂,JSON 无法序列化,用 `binary_redis_client` |
 | 12 | 容器 host=127.0.0.1 + reload | uvicorn --host 0.0.0.0 去 reload |
 | 13 | 知识库 /health 不存在假健康 | 补真实路由 |
 | 14 | 本机 8001 被其他项目容器劫持 | docker ps 排查,Docker Desktop 转发绕过冲突检测 |
@@ -422,7 +429,7 @@ docker stop its-main-backend its-knowledge-api   # compose 会顺带起后端容
 ## 附录 B:命令速查
 
 ```bash
-# 单测(47项,毫秒级)            # E2E(需双服务)              # 网点采集
+# 单测(21项,毫秒级)            # E2E(26项断言,需双服务)              # 网点采集
 python backend/tests/test_service_station_logic.py
 python backend/tests/e2e_test_api.py
 python backend/scripts/import_lenovo_stations.py --cities 武汉 --dry-run

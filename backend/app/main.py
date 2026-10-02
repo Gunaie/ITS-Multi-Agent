@@ -225,97 +225,16 @@ class ChatResponse(BaseModel):
 # 分布式会话存储 (使用 Redis)
 from agents.memory import Session
 from infrastructure.database.redis_client import redis_client, binary_redis_client
-from infrastructure.database.session_impl import SimpleSession
+from infrastructure.session_manager import get_session, save_session
+from infrastructure.text_utils import extract_text, clean_history_text
+from infrastructure.intent_gateway import classify_intent, should_direct_route_service, safety_chat_reply
 from infrastructure.ai.history_compression import compress_history_if_needed
-import pickle
 import time
 
-# 统一文本提取逻辑
-def extract_text(obj, include_reasoning=False):
-    if not obj: return ""
-    if isinstance(obj, str): return obj
-    if isinstance(obj, list): return "".join([extract_text(i, include_reasoning) for i in obj])
-    
-    res = ""
-    reasoning_attr = None
-    content_attr = None
-    
-    # 1. 尝试获取 content 和 reasoning (处理 OpenAI 风格对象)
-    content_attr = getattr(obj, "content", None)
-    reasoning_attr = getattr(obj, "reasoning_content", None)
-    
-    # 2. 处理 ResponseOutputText / ResponseOutputMessage / ResponseOutputReasoningText 等新类型
-    if not content_attr:
-        content_attr = getattr(obj, "text", None)
-    if not reasoning_attr:
-        reasoning_attr = getattr(obj, "reasoning", None)
-        
-    # 3. 处理字典格式
-    if isinstance(obj, dict):
-        content_attr = content_attr or obj.get("content")
-        reasoning_attr = reasoning_attr or obj.get("reasoning_content") or obj.get("reasoning")
-        # 处理 choices 结构 (ChatCompletion 或 ChatCompletionChunk)
-        if "choices" in obj and len(obj["choices"]) > 0:
-            choice = obj["choices"][0]
-            delta = choice.get("delta", {})
-            message = choice.get("message", {})
-            content_attr = content_attr or delta.get("content") or message.get("content")
-            reasoning_attr = reasoning_attr or delta.get("reasoning_content") or message.get("reasoning_content")
-    
-    # 4. 处理 ChatCompletionChunk / ChatCompletion 对象
-    if hasattr(obj, "choices") and len(obj.choices) > 0:
-        choice = obj.choices[0]
-        if hasattr(choice, "delta"):
-            content_attr = content_attr or getattr(choice.delta, "content", None)
-            reasoning_attr = reasoning_attr or getattr(choice.delta, "reasoning_content", None)
-        elif hasattr(choice, "message"):
-            content_attr = content_attr or getattr(choice.message, "content", None)
-            reasoning_attr = reasoning_attr or getattr(choice.message, "reasoning_content", None)
-
-    if include_reasoning and reasoning_attr:
-        res += f"**[思考过程]**\n{reasoning_attr}\n\n---\n\n"
-    
-    if content_attr:
-        if isinstance(content_attr, str):
-            res += content_attr
-        else:
-            # 可能是列表或其他对象，递归提取
-            res += extract_text(content_attr, include_reasoning)
-            
-    # 备选：text 属性 (兜底)
-    if not res and not reasoning_attr:
-        text = getattr(obj, "text", None) or (obj.get("text") if isinstance(obj, dict) else None)
-        if text: res = str(text)
-
-    return res
-
-# 运行时注入片段的正则（这些片段随 Runner.run 的 input 自动写入会话历史，仅服务模型使用，
-# 不应出现在前端展示/会话标题中）
-_SYSTEM_CONTEXT_RE = re.compile(r"\s*\[系统上下文:[^\]]*\]")
-_SYSTEM_DIRECTIVE_RE = re.compile(r"\[系统指令\][^\n]*\n?")
-
-def clean_history_text(text: str) -> str:
-    """剔除历史条目中的运行时注入片段（定位上下文尾部块 / 搜索意图指令头部行）。
-
-    在 /sessions/{id} 读取侧清洗可同时覆盖新旧落库数据； compound 的 [系统提示]
-    已在写入侧防双写删除, 此处不再处理。"""
-    if not text:
-        return text
-    cleaned = _SYSTEM_CONTEXT_RE.sub("", text)
-    cleaned = _SYSTEM_DIRECTIVE_RE.sub("", cleaned)
-    return cleaned.strip()
-
-def get_session(session_id: str) -> Session:
-    session_data = binary_redis_client.get(f"session:{session_id}")
-    if session_data:
-        try:
-            return pickle.loads(session_data)
-        except Exception as e:
-            logger.error(f"Error loading session from redis: {e}")
-
-    # 如果不存在或加载失败，创建新会话
-    new_session = SimpleSession(session_id=session_id)
-    return new_session
+# 注: extract_text / clean_history_text 已迁移至 infrastructure/text_utils.py
+# 注: get_session / save_session 已迁移至 infrastructure/session_manager.py
+# 注: classify_intent / should_direct_route_service / safety_chat_reply 已迁移至 infrastructure/intent_gateway.py
+# pickle 序列化逻辑见 session_manager.py(get_session 内有安全权衡注释)
 
 def extract_client_ip(request: Request) -> str:
     """提取客户端真实公网 IP（供 IP 定位兜底使用），私网 IP 由定位服务侧过滤"""
@@ -367,101 +286,9 @@ def apply_location_to_session(session: Session, request: Request, location: Opti
         session.context["location_hint_pending"] = m.group(1)
 
 
-# ----------------------------- 意图网关（确定性路由） -----------------------------
-# 背景: temperature=0 的 Flash 调度模型在多轮服务场景中不稳定——会复读追问文案、
-# 嘴上说"正在查询"却不交接、甚至编造结果。对"短句 + 明确服务意图"的高频高危意图,
-# 绕过调度者直连业务服务专家（工具链路自带追问与防编造约束）; 复合/模糊意图仍走调度者。
-_SERVICE_INTENT_RE = re.compile(
-    r"维修站|服务站|服务网点|维修点|门店|售后|授权服务|网点|附近(?!里|期|近|面)|哪里能修|怎么去|修的地方|修电脑的地方"
-)
-_SERVICE_CONT_RE = re.compile(r"找到了吗|找到了没|查到了吗|结果呢|有了吗")
-_DIRECT_ROUTE_MAX_LEN = 30
-# 复合意图保护: 句子同时含技术故障关键词时不直连服务（让调度者先处理技术部分）
-_TECH_KEYWORDS_RE = re.compile(
-    r"蓝屏|黑屏|死机|开机|没反应|进水|噪音|清理|更新|卡顿|重启|不能开机|无法开机|不开机"
-)
-# 恶意/异常请求保护: 含编造/虚假等词时不直连服务（应被调度者拒绝）
-_MALICIOUS_RE = re.compile(r"编|虚假|编造|伪造|假的|生成.*地址|编.*维修")
-# 🔒 安全边界保护词：只要出现这些短语，一律视为"闲聊/隐私边界"，直接 chat 分支（调度者自答），
-# 防止被 orchestrator 误判为技术请求交接给 technical，导致内部信息泄漏风险。
-_SAFETY_BOUNDARY_RE = re.compile(
-    r"(系统提示词|提示词|prompt|内部架构|架构.*什么样|.*是.*模型|调用哪些工具|能调用什么|你的工具|能做什么工具|用了什么模型|模型.*名称)"
-    r"|(你是什么AI|你是GPT|你是大模型|你是gpt|告诉我.*内部|内部.*原理|算法.*原理|训练数据|源代码|版权信息)"
-    r"|(你是谁|你叫什么|介绍.*你自己|你是干什么的|你能做什么|你是什么人)"
-)
-# 🔍 强制搜索触发词：一旦命中且非故障类，即使进了 other 分支也让 orchestrator 走 technical 用 bailian_web_search，
-# 但我们在 gateway 层就识别出"纯搜索意图"标为 other（不影响 compound/service_only），
-# 额外特征注入让 routing_inference 能稳定判定为 search。
-_FORCE_SEARCH_RE = re.compile(
-    r"(联网搜|帮我搜|搜索一下|查一下.*最新|最新款|最新.*发布|发布会|新品|新闻|资讯|今天.*天气|今天.*股市|今天.*股价)"
-)
-
-
-def should_direct_route_service(question: str, ctx: dict) -> bool:
-    """短句且意图明确的服务请求 -> 直连业务服务专家。
-    排除: 复合意图（含技术关键词）、恶意请求（编造虚假地址）。"""
-    q = (question or "").strip()
-    if not q or len(q) > _DIRECT_ROUTE_MAX_LEN:
-        return False
-    if not _SERVICE_INTENT_RE.search(q):
-        # 追问后的确认类短句（"找到了吗"）: 仅在会话存在服务查询上下文时直连
-        if _SERVICE_CONT_RE.search(q) and (
-            ctx.get("location_record") or ctx.get("location_hint_pending") or ctx.get("service_query_ts")
-        ):
-            return True
-        return False
-    # 含服务关键词，但检查是否为复合意图或恶意请求
-    if _TECH_KEYWORDS_RE.search(q):
-        return False  # 复合意图，交调度者处理技术部分
-    if _MALICIOUS_RE.search(q):
-        return False  # 恶意请求，交调度者拒绝
-    return True
-
-
-def classify_intent(question: str, ctx: dict) -> str:
-    """五分类意图网关: compound | service_only | safety_chat | search_only | other。
-
-    - compound: 同时含技术故障关键词 + 服务网点关键词 -> 显式编排(先 technical 后 service)
-    - service_only: 仅短句服务意图(沿用 should_direct_route_service 判定)
-    - safety_chat: 🔒 安全边界/泄漏探测 -> 由系统以"联想 ITS 身份"直接回绝，不进任何 Agent
-    - search_only: 🔍 纯搜索意图(帮我搜/最新款/资讯等，且不含技术故障/服务网点) -> 直连技术专家(搜索工具拥有者)，严禁经调度者
-    - other: 单一技术意图/模糊/闲聊 -> 交调度者路由
-    """
-    q = (question or "").strip()
-    if not q:
-        return "other"
-    # 安全边界（恶意探测）：先判，优先级最高
-    if _SAFETY_BOUNDARY_RE.search(q) or _MALICIOUS_RE.search(q):
-        return "safety_chat"
-    has_tech = bool(_TECH_KEYWORDS_RE.search(q))
-    has_service = bool(_SERVICE_INTENT_RE.search(q))
-    if has_tech and has_service:
-        return "compound"
-    # 🔍 纯搜索意图: 命中强制搜索词，且不是技术故障/服务查询 -> search_only
-    if _FORCE_SEARCH_RE.search(q) and not has_tech and not has_service:
-        return "search_only"
-    if should_direct_route_service(question, ctx):
-        return "service_only"
-    return "other"
-
-
-# safety_chat 分支：确定性回复，绕过所有 Agent，防止提示词泄漏/架构探测/虚假编造。
-def _safety_chat_reply(question: str) -> str:
-    q = (question or "")
-    # 编造/虚假门店请求（纯净回绝，不要带 service 追问，避免评测误判路由）
-    if _MALICIOUS_RE.search(q):
-        return "抱歉，我无法生成虚假的维修站地址或联系信息。联想官方授权服务网点的信息可以通过联想官网或官方服务热线 400-100-6000 进行真实查询。"
-    # 系统提示词 / 内部架构 / 工具能力探测（注意：回绝话术不得含"服务网点/告诉我城市"等服务特征词，避免路由误判）
-    if any(k in q for k in ("提示词", "prompt", "系统提示", "内部架构", "架构", "源代码", "训练数据", "算法", "内部原理")):
-        return "抱歉，系统提示词、内部架构与实现细节等信息不便公开。我是联想 ITS 智能技术助手，专注于联想产品的售后技术支持，有什么可以帮您？"
-    # 模型/AI 身份追问 / 工具清单
-    if any(k in q for k in ("什么模型", "什么AI", "是GPT", "是大模型", "调用哪些工具", "能调用什么", "你的工具", "用了什么模型")):
-        return "我是联想 ITS 智能技术助手，面向联想产品提供售后技术诊断与资讯查询服务。如需技术支持，请描述您的设备故障现象，有什么可以帮您？"
-    # 身份/问候类：简洁直接回答，不让 LLM 自由发挥
-    if any(k in q for k in ("你是谁", "你叫什么", "介绍", "你是干什么的", "你能做什么", "你是什么人")):
-        return "您好！我是联想智能技术助手，专注为 ThinkPad、小新、YOGA 笔记本及 ThinkCentre 台式机等联想产品提供售后技术支持。请问您遇到了什么问题？我可以帮您排查设备故障、解答使用疑问或查询附近的联想服务网点。"
-    # 兜底（通常不会走到）
-    return "抱歉，我无法回答此类问题。我是联想 ITS 智能技术助手，专注于联想产品的技术与售后服务，请问有什么可以帮您？"
+# ----------------------------- 意图网关（已迁移至 infrastructure/intent_gateway.py） -----------------------------
+# classify_intent / should_direct_route_service / safety_chat_reply 均在该模块中实现。
+# 五分类: compound | service_only | safety_chat | search_only | other
 
 
 async def run_compound_flow(question: str, session, context) -> str:
@@ -515,43 +342,7 @@ async def run_compound_flow(question: str, session, context) -> str:
     merged = f"{tech_answer}\n\n---\n\n附近联想官方维修站查询结果：\n{svc_answer}"
     return merged
 
-def save_session(session_id: str, session: Session, user_id: str = None, app_type: str = "agent"):
-    try:
-        # 保存会话内容 (使用 pickle 以支持 agents 库的复杂对象)
-        binary_redis_client.setex(
-            f"session:{session_id}",
-            60 * 60 * 24 * 7,  # 延长至7天
-            pickle.dumps(session)
-        )
-        # 如果提供了用户ID，维护用户的会话列表
-        if user_id:
-            # 使用有序集合存储，以时间戳排序，按 app_type 分离
-            redis_client.zadd(f"user_sessions:{app_type}:{user_id}", {session_id: time.time()})
-            # 记录会话的元数据（如标题）
-            if not redis_client.exists(f"session_meta:{session_id}"):
-                # 初始标题使用第一条提问的前15个字
-                title = "新对话"
-                if hasattr(session, 'items') and len(session.items) > 0:
-                    first_msg = session.items[0]
-                    # 使用统一的 extract_text 提取内容
-                    raw_content = ""
-                    if isinstance(first_msg, dict):
-                        raw_content = first_msg.get("content", "")
-                    elif hasattr(first_msg, "content"):
-                        raw_content = first_msg.content
-                    
-                    content = extract_text(raw_content, include_reasoning=False)
-                    content = clean_history_text(content)  # 标题同样剔除注入片段
-                    if content:
-                        title = content[:15] + ("..." if len(content) > 15 else "")
-                
-                redis_client.hset(f"session_meta:{session_id}", mapping={
-                    "title": title,
-                    "created_at": time.time(),
-                    "app_type": app_type
-                })
-    except Exception as e:
-        logger.error(f"Error saving session to redis: {e}")
+# save_session 已迁移至 infrastructure/session_manager.py(get_session/save_session 同模块)
 
 @app.get("/location/config")
 async def location_config(current_user: dict = Depends(get_current_user)):
@@ -711,8 +502,8 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
             # 注意：safety 不走 Runner，用户消息不会自动写入 session.items，
             # 需手动追加，否则 save_session 提取标题时 items 为空导致落为"新对话"。
             session.items.append({"role": "user", "content": chat_request.question})
-            session.items.append({"role": "assistant", "content": _safety_chat_reply(chat_request.question)})
-            result = type("R", (), {"final_output": _safety_chat_reply(chat_request.question)})()
+            session.items.append({"role": "assistant", "content": safety_chat_reply(chat_request.question)})
+            result = type("R", (), {"final_output": safety_chat_reply(chat_request.question)})()
             logger.info("Intent gate: safety_chat direct reply")
         elif intent == "service_only":
             session.context["service_query_ts"] = time.time()
@@ -780,7 +571,7 @@ async def chat_knowledge(request: Request, chat_request: ChatRequest, current_us
 
         # 安全边界/身份问候类问题：直接确定性回复，不查知识库（避免知识库无相关内容时 LLM 长篇自由发挥）
         if _SAFETY_BOUNDARY_RE.search(chat_request.question) or _MALICIOUS_RE.search(chat_request.question):
-            safety_text = _safety_chat_reply(chat_request.question)
+            safety_text = safety_chat_reply(chat_request.question)
             await session.add_items([{"role": "user", "content": chat_request.question}])
             await session.add_items([{"role": "assistant", "content": safety_text}])
             save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
@@ -870,7 +661,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             await compress_history_if_needed(session)
             if intent == "safety_chat":
                 # 🔒 安全边界：确定性回复，直接生成一条 SSE 后退出，不启动任何 Agent
-                safety_text = _safety_chat_reply(chat_request.question)
+                safety_text = safety_chat_reply(chat_request.question)
                 logger.info("Intent gate (stream): safety_chat direct reply")
                 # 与前端协议统一：文本须用 run_item_stream_event/message_output_item.content。
                 # 前端不识别 raw_response_event，旧写法会导致安全回绝时助手气泡空白；并补 [DONE] 结束标记。

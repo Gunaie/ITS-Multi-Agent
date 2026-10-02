@@ -4,7 +4,7 @@
 
 ## 1. 项目一句话
 
-联想售后多智能体智能客服系统(个人全栈项目,模拟联想售后场景):三模型三分支 Agent 编排 + RAG 知识库 + 百度地图官方网点核验 + MCP 联网搜索,Vue3 双前端 + FastAPI 双后端 + Docker Compose 6 容器一键部署。
+联想售后多智能体智能客服系统(个人全栈项目,模拟联想售后场景):三模型五分支 Agent 编排 + RAG 知识库 + 百度地图官方网点核验 + MCP 联网搜索,Vue3 双前端 + FastAPI 双后端 + Docker Compose 6 容器一键部署。
 
 ## 2. 快速上手路径(按顺序读)
 
@@ -31,7 +31,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 - **全国采集完成:76/76 城**(覆盖 75 城,累计 806 条网点;武汉 25/长沙 27/北京 24 等 Top 城市网点齐全)
 - **断点缓存**:`backend/scripts/.lenovo_stations_cache.json`(done_cities=76, records=798;records 含缓存写入前已存在的 8 条 init_db 官方验证数据,故 798≠806,以 MySQL 实际 806 条为准)
 - **知识库向量库**:651 标题全量入库,**embedding=text-embedding-v4**(09-05 换 v4 后已全量重建;v3/v4 向量空间不兼容,换 embedding 必须重建库)
-- Redis:会话 JSON 序列化存储
+- Redis:会话 pickle 序列化存储(agents SDK 的 Session 对象含复杂结构,JSON 无法直接序列化)
 
 ## 4. 进行中事项(接手后立即要做的)
 
@@ -114,7 +114,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 | 百度**双 AK** | `BAIDU_MAP_AK`=服务端AK(geocode/POI/测距);`BAIDU_MAP_AK_BROWSER`=浏览器端AK(前端JS定位,**新规:服务端AK不能用于浏览器端**);白名单不支持http://头,localhost 无法过校验,开发期填 `*` |
 | 数据库 | MySQL 库名 `its`;`bcrypt==4.0.1` 锁死(passlib 1.7.4 不兼容 ≥4.1) |
 | 本地开发启动 | `python scripts/start_dev.py`(全本地)或混合模式:容器起 mysql/redis/frontend/frontend-admin + 本地 venv 起 8001/8002(先 `docker stop its-main-backend its-knowledge-api` 防端口冲突) |
-| 测试 | `python backend/tests/test_service_station_logic.py`(47项,毫秒级) / `e2e_test_api.py`(16项,需双服务运行) / `eval_rag_quality.py`(RAG 评测,详见进行中事项 #5) |
+| 测试 | `python backend/tests/test_service_station_logic.py`(16项,毫秒级) / `e2e_test_api.py`(26项断言,需双服务运行) / `eval_rag_quality.py`(RAG 评测,详见进行中事项 #5) |
 
 ## 6. Git 状态(2026-09-05 交接快照)
 
@@ -126,7 +126,7 @@ its-mysql(33070) its-redis(6379) its-knowledge-api(8001) its-main-backend(8002) 
 1. **提示词严禁出现未注入/已移除的工具名**——哪怕语义是"禁止调用",Flash 模型会当真调用 → ModelBehaviorError
 2. **流式 Function Calling 必须**在 technical_agent.py 的 ModelSettings extra_body 注入 `tool_stream: True`(glm 系列必需,缺失会静默失败不调工具直接编答案;qwen 系列忽略该参数无害,当前注入保留作兼容)
 3. **自定义 MCP 类必须带 `use_structured_content=False` 属性**,否则每次调用 AttributeError 被 SDK 吞掉 → 模型重试至 Max turns exceeded;MCP 客户端用自研 `BailianWebSearchMCP`(httpx POST,协议锁 2024-11-05,3次重试分级日志)
-4. **Redis 会话必须 JSON 序列化,禁 pickle**
+4. **Redis 会话用 pickle 序列化**(agents SDK 的 Session 对象含 Agent 实例/工具调用等复杂结构,JSON 无法直接序列化;`binary_redis_client` 独立客户端处理字节)
 5. **temperature=0 下模型会模仿会话历史**——会话历史必须过滤工具调用条目(仅保留调度者自己的交接记录);测试必须用唯一 session_id,复用会话=假失败
 6. **用户文本说的地点 > 浏览器粗定位**(location_hint_pending 机制);定位四级降级失败必须追问,**禁止静默兜底默认城市**
 7. **坐标系契约 BD-09**:前端坐标带 `wgs84:/gcj02:/bd09:` 前缀,后端统一 BD-09

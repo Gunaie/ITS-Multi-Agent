@@ -75,8 +75,8 @@ docker compose down                   # 停止全部服务
 测试命令：
 
 ```powershell
-python backend/tests/test_service_station_logic.py   # 47 项纯逻辑单测 (无需外部服务，pytest 可直接运行)
-python backend/tests/e2e_test_api.py                 # 16 项 API E2E (需启动双服务)
+python backend/tests/test_service_station_logic.py   # 16 项纯逻辑单测 (无需外部服务，pytest 可直接运行)
+python backend/tests/e2e_test_api.py                 # 26 项 API E2E 断言 (需启动双服务)
 python backend/tests/test_web_search_routing.py      # 联网搜索路由回归 (免地图配额)
 ```
 
@@ -112,7 +112,7 @@ graph TD
 
 ### 1. 应用后端 (`backend/app`)
 作为系统的“大脑”与“神经中枢”，负责 Agent 编排与业务逻辑。
-- **智能调度专家 (Orchestrator)**: 意图网关三分支编排——纯服务诉求（短句+服务关键词）直连业务服务专家；复合意图（技术+服务）先技术后服务合并回答；技术/闲聊类经调度专家路由，支持 Agent 间任务交接（Handoff）。
+- **智能调度专家 (Orchestrator)**: 意图网关五分支编排——安全边界（探测提示词/身份盘问）确定性回绝、纯搜索意图直连技术专家联网搜索、纯服务诉求（短句+服务关键词）直连业务服务专家、复合意图（技术+服务）先技术后服务合并回答、技术/闲聊类经调度专家路由，支持 Agent 间任务交接（Handoff）。
 - **三模型分工**: 调度=qwen-max、技术专家=qwen-plus-2025-09-11（非思考模型，工具调用响应快）、服务专家=qwen3.8-flash，知识库RAG生成=qwen-max，embedding=text-embedding-v4，按角色择优分配。
 - **外部能力集成**: 通过 **MCP (Model Context Protocol)** 接入联网搜索，并通过百度地图官方 API 接入地理位置服务。
 - **会话持久化**: 基于 Redis 实现分布式 Session 管理，支持多平台会话隔离。
@@ -176,24 +176,24 @@ graph TD
 ### 3. 测试金字塔
 | 层级 | 位置 | 说明 | 外部依赖 |
 |---|---|---|---|
-| 纯逻辑单测 (47 项) | `backend/tests/test_service_station_logic.py` | 电话/名称/地址匹配、多电话拆分、坐标转换、去重合并、追问链路 | 无（毫秒级） |
+| 纯逻辑单测 (21 项) | `backend/tests/test_service_station_logic.py` 等 | 电话/名称/地址匹配、多电话拆分、坐标转换、去重合并、追问链路 | 无（毫秒级） |
 | 工具冒烟测试 | `backend/tests/smoke_test_station_tool.py` | 真实 geocode → 检索 → 核验 → 距离全链路 | 百度 API + DB |
-| API E2E (16 项) | `backend/tests/e2e_test_api.py` | 健康/鉴权/会话/四类对话/流式/RAG/故障对话回放/历史去重/清理 | 双服务运行 |
+| API E2E (26 项断言) | `backend/tests/e2e_test_api.py` | 健康/鉴权/会话/四类对话/流式/RAG/故障对话回放/历史去重/清理 | 双服务运行 |
 | 路由回归测试 | `backend/tests/test_web_search_routing.py` | 验证实时资讯走 MCP 主搜索而非本地兜底 | 后端运行 |
-| **质量评测 (25 项)** | `backend/tests/eval_agent_quality.py` | 路由正确率/内容完整性/安全合规/响应时间 | 后端运行 |
+| **质量评测 (50 项)** | `backend/tests/eval_agent_quality.py` | 路由正确率/内容完整性/安全合规/响应时间 | 后端运行 |
 
 ### 4. 质量评测结果
 
-自建规则断言 + 内容特征推断（不依赖 LLM-as-judge），25 条标注集覆盖路由/技术/服务/多轮/安全 5 大类：
+自建规则断言 + 内容特征推断（不依赖 LLM-as-judge），50 条标注集覆盖路由/技术/服务/多轮/安全 5 大类：
 
 | 指标 | 结果 |
 |---|---|
-| 综合通过率（在线实测） | 24/25 (96%)，唯一未过项 R04 为评估器误判（后端追问城市的行为正确） |
+| 综合通过率（在线实测，历史 25 条集） | 24/25 (96%)，唯一未过项 R04 为评估器误判（后端追问城市的行为正确） |
 | 综合通过率（收紧判定规则后离线回放） | 25/25 (100%) |
 | 内容完整率 | 25/25 (100%) |
 | 安全合规率 | 25/25 (100%) |
 
-> 完整报告见 [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md)。早期"Flash 模型不交接技术专家 / 搜索类问题倾向不联网"的问题已通过意图网关与工具归属改造修复（见 [docs/HANDOVER.md](docs/HANDOVER.md) #13）。评测墙钟耗时受模型侧响应影响波动大，不作为稳定指标。
+> 标注集已扩充至 50 条（路由/技术/服务/多轮/安全 5 大类），最新全量评测结果见 [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md)。早期"Flash 模型不交接技术专家 / 搜索类问题倾向不联网"的问题已通过意图网关与工具归属改造修复（见 [docs/HANDOVER.md](docs/HANDOVER.md) #13）。评测墙钟耗时受模型侧响应影响波动大，不作为稳定指标。
 
 ## 📂 目录说明
 
