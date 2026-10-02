@@ -97,6 +97,28 @@
               </div>
             </div>
           </div>
+
+          <!-- 反馈操作：点赞 / 点踩 -->
+          <div v-if="msg.role === 'assistant' && !msg.loading && msg.content" class="message-actions">
+            <button type="button" class="rate-btn"
+                    :class="{ active: msg.myRating === 'up' }"
+                    title="回答有帮助" @click="rateMessage(index, 'up')">
+              <svg viewBox="0 0 24 24" class="rate-svg" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+              </svg>
+              <span>有帮助</span>
+            </button>
+            <button type="button" class="rate-btn"
+                    :class="{ active: msg.myRating === 'down' }"
+                    title="回答没有解决问题" @click="rateMessage(index, 'down')">
+              <svg viewBox="0 0 24 24" class="rate-svg" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>
+              </svg>
+              <span>没解决</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -139,16 +161,44 @@
           </div>
         </div>
         <div class="input-footer">
-          联想智能技术助手 · 售后技术支持与服务中心
+          <span class="handoff-link" @click="openTicketDialog">
+            <el-icon><Service /></el-icon>问题未解决？<strong>转人工客服</strong>
+          </span>
+          <span class="footer-dot">·</span>
+          <span>联想智能技术助手 · 售后技术支持与服务中心</span>
         </div>
       </div>
     </div>
+
+    <!-- 人工支持工单 -->
+    <el-dialog v-model="ticketVisible" title="创建人工支持工单" width="480px" append-to-body>
+      <el-form label-position="top">
+        <el-form-item label="问题类别">
+          <el-select v-model="ticketForm.category" style="width: 100%">
+            <el-option v-for="c in ticketCategories" :key="c" :label="c" :value="c" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="问题描述">
+          <el-input v-model="ticketForm.content" type="textarea" :rows="4"
+                    maxlength="500" show-word-limit
+                    placeholder="请简要描述您遇到的问题或诉求" />
+        </el-form-item>
+        <el-form-item label="联系方式（可选）">
+          <el-input v-model="ticketForm.contact" maxlength="100"
+                    placeholder="电话或邮箱，方便客服与您联系" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ticketVisible = false">取消</el-button>
+        <el-button type="primary" :loading="ticketSubmitting" @click="submitTicket">提交工单</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, nextTick, onMounted, watch } from 'vue'
-import { chatWithAgent, chatStreamWithAgent, getSessionDetail, getLocationByIp, getLocationConfig } from '@/api/app'
+import { chatWithAgent, chatStreamWithAgent, getSessionDetail, getLocationByIp, getLocationConfig, createTicket, submitFeedback } from '@/api/app'
 import { marked } from 'marked'
 import { Monitor, Location, Download, Position, Loading, List, ArrowDown, Warning, Setting, Connection, Service } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -220,7 +270,8 @@ const loadSession = async (sid) => {
         content: content,
         loading: false,
         showThinking: false,
-        thinkingSteps: thinkingSteps
+        thinkingSteps: thinkingSteps,
+        myRating: ''
       }
     })
   } catch (err) {
@@ -440,7 +491,8 @@ const handleSend = async () => {
     content: '',
     loading: true,
     showThinking: false,
-    thinkingSteps: []
+    thinkingSteps: [],
+    myRating: ''
   }
   messages.value.push(botMsg)
   scrollToBottom()
@@ -527,6 +579,79 @@ const handleSend = async () => {
       scrollToBottom()
     }
   )
+}
+
+// ---- 消息反馈（点赞 / 点踩）----
+// turn_index = 该助手消息之前出现的 assistant 消息数（同一会话内稳定）
+const assistantTurnNo = (index) =>
+  messages.value.slice(0, index).filter(m => m.role === 'assistant').length
+
+const rateMessage = async (index, rating) => {
+  const msg = messages.value[index]
+  if (msg.myRating === rating) return  // 相同评分不重复提交
+  try {
+    const res = await submitFeedback({
+      session_id: props.sessionId,
+      turn_index: assistantTurnNo(index),
+      rating
+    })
+    msg.myRating = rating
+    ElMessage.success(res.message || '感谢您的反馈')
+    if (rating === 'down') {
+      // 点踩后轻量引导转人工，用户可拒绝
+      ElMessageBox.confirm('是否为您创建人工工单，由客服跟进该问题？', '转人工客服', {
+        confirmButtonText: '创建工单',
+        cancelButtonText: '不用了',
+        type: 'question'
+      }).then(openTicketDialog).catch(() => {})
+    }
+  } catch (e) { /* 拦截器已统一提示 */ }
+}
+
+// ---- 人工工单 ----
+const ticketVisible = ref(false)
+const ticketSubmitting = ref(false)
+const ticketCategories = ['技术问题', '服务投诉', '维修进度', '保修政策', '其他']
+const ticketForm = ref({ category: '技术问题', content: '', contact: '' })
+
+const openTicketDialog = () => {
+  // 预填最近一条用户提问，减少用户输入
+  if (!ticketForm.value.content.trim()) {
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].role === 'user') {
+        ticketForm.value.content = messages.value[i].content.slice(0, 200)
+        break
+      }
+    }
+  }
+  ticketVisible.value = true
+}
+
+const submitTicket = async () => {
+  if (!ticketForm.value.content.trim()) {
+    ElMessage.warning('请填写问题描述')
+    return
+  }
+  ticketSubmitting.value = true
+  try {
+    const res = await createTicket({
+      session_id: props.sessionId,
+      category: ticketForm.value.category,
+      content: ticketForm.value.content,
+      contact: ticketForm.value.contact
+    })
+    ticketVisible.value = false
+    ticketForm.value = { category: '技术问题', content: '', contact: '' }
+    ElMessage.success(res.message || '工单已创建')
+    messages.value.push({
+      role: 'assistant',
+      content: `✅ 人工工单已创建（编号：#${res.id}），客服人员将尽快与您联系。`,
+      loading: false, showThinking: false, thinkingSteps: [], myRating: ''
+    })
+    scrollToBottom()
+  } catch (e) { /* 拦截器已统一提示 */ } finally {
+    ticketSubmitting.value = false
+  }
 }
 
 onMounted(() => {
@@ -940,7 +1065,53 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-sub);
   margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
+
+.handoff-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary-blue);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.handoff-link:hover { opacity: 0.75; }
+.footer-dot { color: var(--border-color); }
+
+/* 消息反馈操作 */
+.message-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.rate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-sub);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.rate-btn:hover {
+  color: var(--primary-blue);
+  background: #F1F5F9;
+}
+.rate-btn.active {
+  color: var(--primary-blue);
+  background: #EFF6FF;
+  border-color: #BFDBFE;
+}
+.rate-svg { width: 14px; height: 14px; }
 
 .loading-dots {
   display: flex;

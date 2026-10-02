@@ -107,6 +107,31 @@ export function getLocationConfig() {
   })
 }
 
+// ---- 人工工单 ----
+export function createTicket(data) {
+  return service({
+    url: '/support/tickets',
+    method: 'post',
+    data
+  })
+}
+
+export function getTickets() {
+  return service({
+    url: '/support/tickets',
+    method: 'get'
+  })
+}
+
+// ---- 消息反馈（点赞/点踩，幂等）----
+export function submitFeedback(data) {
+  return service({
+    url: '/support/feedback',
+    method: 'post',
+    data
+  })
+}
+
 export function chatStreamWithAgent(data, onMessage, onDone, onError) {
   const controller = new AbortController();
   const signal = controller.signal;

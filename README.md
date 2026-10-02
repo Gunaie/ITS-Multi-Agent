@@ -32,10 +32,10 @@ cp .env.example .env
 #   BAIDU_MAP_AK_BROWSER=your_browser_ak   # 百度地图"浏览器端"AK（前端 JS API 浏览器定位）
 
 # 3. 一键启动（首次会自动构建镜像）
-docker-compose up -d
+docker compose up -d
 
 # 4. 查看服务状态
-docker-compose ps
+docker compose ps
 ```
 
 启动完成后访问：
@@ -46,17 +46,17 @@ docker-compose ps
 | 管理平台 | http://localhost:81 | 知识库管理与检索调试 |
 | 应用后端 API | http://localhost:8002 | Agent 编排 + 工具集成 |
 | 知识库 API | http://localhost:8001 | RAG 检索 + 文档管理 |
-| MySQL | localhost:3307 | 用户 + 官方授权网点库 |
+| MySQL | localhost:33070 | 用户 + 官方授权网点库（宿主 3307–3406 端口段被 Windows Hyper-V 保留，故映射为 33070） |
 | Redis | localhost:6379 | 会话存储 |
 
-> 首次构建约 5-8 分钟（已配置清华镜像源加速）。后续重启秒级完成。
+> 首次构建约 5-8 分钟（pip 使用官方 PyPI 主源 + 阿里云镜像额外索引双源兜底）。后续重启秒级完成。
 > 首次使用需在咨询平台注册账号后登录即可对话。
 
 **常用命令：**
 ```bash
-docker-compose logs -f main-backend   # 查看后端日志
-docker-compose restart frontend       # 重建后端后刷新前端 DNS
-docker-compose down                   # 停止全部服务
+docker compose logs -f main-backend   # 查看后端日志
+docker compose restart frontend       # 重建后端后刷新前端 DNS
+docker compose down                   # 停止全部服务
 ```
 
 ## 🔧 维护工具
@@ -75,7 +75,7 @@ docker-compose down                   # 停止全部服务
 测试命令：
 
 ```powershell
-python backend/tests/test_service_station_logic.py   # 44 项纯逻辑单测 (无需外部服务)
+python backend/tests/test_service_station_logic.py   # 47 项纯逻辑单测 (无需外部服务，pytest 可直接运行)
 python backend/tests/e2e_test_api.py                 # 16 项 API E2E (需启动双服务)
 python backend/tests/test_web_search_routing.py      # 联网搜索路由回归 (免地图配额)
 ```
@@ -158,7 +158,7 @@ graph TD
 - **AI 模型**: 三模型分工 (qwen-max 调度 / qwen-plus-2025-09-11 技术专家+检索rerank+会话压缩 / qwen3.8-flash 服务专家) + qwen-max RAG生成 + text-embedding-v4 向量化，统一经阿里百炼 OpenAI 兼容接口接入
 - **数据库**: MySQL (用户数据 + 官方授权网点库), Redis (会话数据), ChromaDB (向量数据)
 - **可观测性**: LangSmith (全链路追踪)
-- **评估框架**: Ragas (量化 RAG 效果)
+- **评估框架**: 自建 LLM-as-judge 评测器（指标定义对齐 Ragas），pytest 单元测试 + GitHub Actions CI
 - **协议**: MCP (Model Context Protocol), SSE (Server-Sent Events)
 
 ## 📊 评估与监控
@@ -169,8 +169,9 @@ graph TD
 - 工具调用的输入输出参数。
 - 模型生成的 Token 消耗与响应耗时。
 
-### 2. 量化评估 (Ragas)
-在 `tests/evaluation/` 目录下提供了基于 Ragas 的评估脚本，支持对 Faithfulness、Relevance 等核心指标进行量化分析，确保知识库回答的准确性。
+### 2. 量化评估（自建评测器，指标对齐 Ragas）
+- `backend/tests/eval_rag_quality.py`：自建 LLM-as-judge，按 Ragas 口径计算 Faithfulness、Answer Relevancy、Context Precision/Recall，对 30 条标注集量化 RAG 效果。
+- `backend/tests/eval_agent_quality.py`：规则断言 + 内容特征推断（不依赖 LLM-as-judge），评估 Agent 路由正确率、内容完整性与安全合规。
 
 ### 3. 测试金字塔
 | 层级 | 位置 | 说明 | 外部依赖 |
@@ -187,13 +188,12 @@ graph TD
 
 | 指标 | 结果 |
 |---|---|
-| 综合通过率 | 20/25 (80%) |
-| 路由正确率 | 21/25 (84%) |
-| 内容完整率 | 23/25 (92%) |
+| 综合通过率（在线实测） | 24/25 (96%)，唯一未过项 R04 为评估器误判（后端追问城市的行为正确） |
+| 综合通过率（收紧判定规则后离线回放） | 25/25 (100%) |
+| 内容完整率 | 25/25 (100%) |
 | 安全合规率 | 25/25 (100%) |
-| 平均响应时间 | 4.24s |
 
-> 完整报告见 [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md)。已知限制：Flash 模型在简短技术问题上有概率直接回答而不交接技术专家；部分搜索类问题倾向用训练知识而非联网搜索。
+> 完整报告见 [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md)。早期"Flash 模型不交接技术专家 / 搜索类问题倾向不联网"的问题已通过意图网关与工具归属改造修复（见 [docs/HANDOVER.md](docs/HANDOVER.md) #13）。评测墙钟耗时受模型侧响应影响波动大，不作为稳定指标。
 
 ## 📂 目录说明
 

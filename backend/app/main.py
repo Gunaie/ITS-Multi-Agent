@@ -36,7 +36,29 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-app = FastAPI(title="ITS Multi-Agent Application Backend")
+from contextlib import asynccontextmanager
+from infrastructure.database.init_db import init_db
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动即确保数据库 schema（幂等 DDL + 核心网点写入），替代手动执行 init_db.py。"""
+    def _init_with_retry():
+        import time as _time
+        last_err = None
+        for attempt in range(3):
+            try:
+                init_db()
+                return
+            except Exception as e:
+                last_err = e
+                logger.warning(f"init_db 第{attempt + 1}/3 次失败: {e}")
+                _time.sleep(2)
+        logger.error(f"init_db 重试后仍失败，相关接口可能 500: {last_err}")
+    # DDL 为同步阻塞调用，放线程池避免阻塞事件循环
+    await asyncio.to_thread(_init_with_retry)
+    yield
+
+app = FastAPI(title="ITS Multi-Agent Application Backend", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -60,6 +82,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # 注册 Auth 路由
 app.include_router(auth_router)
+from infrastructure.support.router import router as support_router
+app.include_router(support_router)
 
 from infrastructure.tools.mcp.mcp_servers import search_mac_client, baidu_map_mcp
 from infrastructure.tools.local.location_service import parse_frontend_location
@@ -171,10 +195,15 @@ async def startup_event():
     asyncio.create_task(init_mcp())
 
 # 配置 CORS
+# 白名单由 CORS_ALLOWED_ORIGINS（逗号分隔）控制，默认仅本地双前端，
+# 不再使用 allow_origins=* + credentials=True 的无效且危险组合；
+# 仅当显式配置 * 时放开全部来源，且不允许携带凭证（浏览器规范也会忽略）。
+_cors_origins = settings.cors_origins
+_cors_allow_all = "*" in _cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"] if _cors_allow_all else _cors_origins,
+    allow_credentials=not _cors_allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -657,6 +686,11 @@ async def chat(request: Request, chat_request: ChatRequest, current_user: dict =
         logger.info(f"User {user_id} asked: {chat_request.question} (session: {chat_request.session_id})")
         session = get_session(chat_request.session_id)
 
+        # 登录用户写入会话上下文（供 request_human_support 等工具读取身份）
+        session.context["current_user"] = {
+            "id": current_user["id"], "username": current_user["username"]
+        }
+
         # 归一化定位信息（坐标/文本/问题文本窄提取 + 客户端 IP），带来源与时间戳
         apply_location_to_session(session, request, chat_request.location, chat_request.question)
 
@@ -812,6 +846,11 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
             user_id = current_user['username']
             logger.info(f"User {user_id} asked (stream): {chat_request.question} (session: {chat_request.session_id})")
             session = get_session(chat_request.session_id)
+
+            # 登录用户写入会话上下文（供 request_human_support 等工具读取身份）
+            session.context["current_user"] = {
+                "id": current_user["id"], "username": current_user["username"]
+            }
 
             # 归一化定位信息（坐标/文本/问题文本窄提取 + 客户端 IP），带来源与时间戳
             apply_location_to_session(session, request, chat_request.location, chat_request.question)

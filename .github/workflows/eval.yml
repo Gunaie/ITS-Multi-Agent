@@ -1,0 +1,151 @@
+name: Eval (手动评测)
+
+# 评测回归依赖真实百炼 API（产生费用），不随每次 push 运行，仅手动触发。
+# 需要在仓库 Settings → Secrets 配置：
+#   AL_BAILIAN_API_KEY  必填
+#   BAIDU_MAP_AK        仅在取消勾选"跳过百度类用例"时需要
+on:
+  workflow_dispatch:
+    inputs:
+      rag_ids:
+        description: "RAG 只跑指定 ID（逗号分隔，如 RAG01,RAG31）；留空跑全部 50 条"
+        required: false
+        default: ""
+      agent_ids:
+        description: "Agent 只跑指定 ID（逗号分隔）；留空跑全部"
+        required: false
+        default: ""
+      skip_baidu:
+        description: "跳过消耗百度地图配额的服务类用例（8 条）"
+        type: boolean
+        default: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: its_secure_2024
+          MYSQL_DATABASE: its
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pits_secure_2024"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+
+    env:
+      AL_BAILIAN_API_KEY: ${{ secrets.AL_BAILIAN_API_KEY }}
+      AL_BAILIAN_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      # 知识服务 langchain-openai 与嵌入读取的键
+      OPENAI_API_KEY: ${{ secrets.AL_BAILIAN_API_KEY }}
+      OPENAI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      MODEL: qwen-plus-2025-09-11
+      EMBEDDING_MODEL: text-embedding-v4
+      RERANK_MODEL: qwen-plus-2025-09-11
+      ORCHESTRATOR_MODEL_NAME: qwen-max
+      TECHNICAL_MODEL_NAME: qwen-plus-2025-09-11
+      SERVICE_MODEL_NAME: qwen3.8-flash
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: its_secure_2024
+      MYSQL_DATABASE: its
+      BAIDU_MAP_AK: ${{ secrets.BAIDU_MAP_AK }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/app/requirements.txt
+            backend/knowledge/requirements.txt
+
+      - name: 校验密钥
+        run: |
+          if [ -z "$AL_BAILIAN_API_KEY" ]; then
+            echo "::error::未配置 secret AL_BAILIAN_API_KEY，无法运行真实评测"
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/app/requirements.txt
+          pip install -r backend/knowledge/requirements.txt
+
+      - name: 重建向量库（15 篇精选文档，约 15 次嵌入调用）
+        working-directory: backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
+        run: python knowledge/init_kb.py
+
+      - name: 启动知识服务（8001）
+        working-directory: backend/knowledge
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
+        run: |
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8001 \
+            > /tmp/kb.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8001/health; then echo "kb ready"; exit 0; fi
+            sleep 2
+          done
+          cat /tmp/kb.log; exit 1
+
+      - name: 启动主后端（8002，lifespan 自动建表）
+        working-directory: backend/app
+        env:
+          KNOWLEDGE_BASE_URL: http://127.0.0.1:8001
+        run: |
+          nohup python -m uvicorn main:app --host 127.0.0.1 --port 8002 \
+            > /tmp/app.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8002/health; then echo "app ready"; exit 0; fi
+            sleep 2
+          done
+          cat /tmp/app.log; exit 1
+
+      - name: RAG 质量评测（50 条或指定 ID）
+        run: |
+          RAG_IDS="${{ github.event.inputs.rag_ids }}"
+          ARGS=""
+          if [ -n "$RAG_IDS" ]; then ARGS="--ids $RAG_IDS"; fi
+          python backend/tests/eval_rag_quality.py $ARGS
+
+      - name: Agent 质量评测（50 条或指定 ID）
+        run: |
+          AGENT_IDS="${{ github.event.inputs.agent_ids }}"
+          ARGS=""
+          if [ -n "$AGENT_IDS" ]; then ARGS="--ids $AGENT_IDS"; fi
+          if [ "${{ github.event.inputs.skip_baidu }}" = "true" ]; then
+            ARGS="$ARGS --skip-baidu"
+          fi
+          python backend/tests/eval_agent_quality.py $ARGS
+
+      - name: 上传评测产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: |
+            docs/RAG_EVAL_REPORT.md
+            docs/EVAL_REPORT.md
+            backend/tests/rag_eval_results.json
+            backend/tests/eval_results.json
+          if-no-files-found: warn

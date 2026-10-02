@@ -71,6 +71,29 @@ class Settings(BaseSettings):
         description="知识库服务URL"
     )
 
+    # ==================== CORS 配置 ====================
+    # 允许跨域的前端来源（逗号分隔）；默认仅本地双前端（docker 80/81 与 vite 3000/3002）
+    # 生产环境必须按实际域名/端口收紧；显式填 * 表示不做来源限制（此时浏览器不会携带凭证）
+    CORS_ALLOWED_ORIGINS: Optional[str] = Field(
+        default=None,
+        description="允许跨域的前端来源，逗号分隔"
+    )
+
+    @property
+    def cors_origins(self) -> list:
+        """解析 CORS 白名单：未配置时返回本地开发默认值。"""
+        raw = (self.CORS_ALLOWED_ORIGINS or "").strip()
+        if not raw:
+            return [
+                "http://localhost",
+                "http://localhost:81",
+                "http://localhost:3000",
+                "http://localhost:3002",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:3002",
+            ]
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
     # 通义千问搜索服务
     DASHSCOPE_BASE_URL: Optional[str] = Field(
         default=None,

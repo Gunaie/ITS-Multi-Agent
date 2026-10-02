@@ -92,6 +92,46 @@ def init_db():
                     (name, address, lat, lng, phone, brand, _name_addr_hash(name, address))
                 )
 
+            # ==================== 人工工单（业务闭环：转人工/投诉） ====================
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    username VARCHAR(50),
+                    session_id VARCHAR(64),
+                    category VARCHAR(50) DEFAULT '技术问题',
+                    content TEXT NOT NULL,
+                    contact VARCHAR(100),
+                    status VARCHAR(20) NOT NULL DEFAULT 'open'
+                        COMMENT 'open/processing/closed/cancelled',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    KEY idx_user (user_id),
+                    KEY idx_session (session_id),
+                    KEY idx_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='人工支持工单 (转人工/投诉/在线未解决)'
+            """)
+
+            # ==================== 消息反馈（赞/踩回流） ====================
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS message_feedback (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    username VARCHAR(50),
+                    session_id VARCHAR(64),
+                    turn_index INT NOT NULL COMMENT '助手消息在会话中的轮次序号',
+                    rating VARCHAR(10) NOT NULL COMMENT 'up/down',
+                    reason VARCHAR(255),
+                    comment TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_user_turn (user_id, session_id, turn_index),
+                    KEY idx_rating (rating)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='助手消息质量反馈 (点赞/点踩)'
+            """)
+
         conn.commit()
         print("Database initialized successfully (idempotent) with VERIFIED official service stations.")
     finally:

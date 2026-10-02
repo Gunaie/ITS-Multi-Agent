@@ -1,0 +1,19 @@
+# 直接依赖（不锁版本）—— 用 `uv pip compile requirements.in -o requirements.txt` 生成锁定文件
+fastapi
+uvicorn
+aiofiles
+langchain
+langchain-community
+langchain-text-splitters
+langchain-openai
+chromadb
+pypdf
+docx2txt
+python-magic
+python-dotenv
+pydantic-settings
+jieba
+scikit-learn
+beautifulsoup4
+markdownify
+python-multipart

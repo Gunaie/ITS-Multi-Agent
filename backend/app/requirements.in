@@ -1,0 +1,23 @@
+# 直接依赖（不锁版本）—— 用 `uv pip compile requirements.in -o requirements.txt` 生成锁定文件
+fastapi
+uvicorn
+python-dotenv
+pymysql
+DBUtils
+openai
+httpx
+openai-agents
+pystun3
+redis
+aiofiles
+aiohttp
+setuptools
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt==4.0.1  # passlib 1.7.4 与 bcrypt>=4.1 不兼容(72字节探测报错)，必须锁定
+python-multipart
+slowapi
+langsmith
+pydantic-settings
+ragas
+datasets

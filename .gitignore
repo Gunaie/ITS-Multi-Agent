@@ -13,6 +13,8 @@ node_modules/
 dist/
 build/
 .eslintcache
+*.timestamp-*.mjs
+.vite/
 
 # Logs
 *.log
@@ -20,6 +22,7 @@ logs/
 
 # Database & Vector Store
 chroma_kb1/
+chroma_kb1.bak*/
 *.sqlite3
 
 # IDE

@@ -13,6 +13,7 @@ from infrastructure.tools.local.service_station import (
     get_nearby_official_repair_stations,
     map_uri
 )
+from infrastructure.tools.local.escalation_tool import request_human_support
 # 移除冗余的子工具导入，仅保留高速集成工具
 # resolve_user_location_from_text 也不再直接暴露给 Agent，由集成工具内部调用
 
@@ -74,7 +75,8 @@ comprehensive_service_agent = Agent(
     # 仅保留高速集成工具和导航工具，彻底杜绝模型链式调用
     tools=[
         get_nearby_official_repair_stations,
-        map_uri
+        map_uri,
+        request_human_support
     ],
     # mcp_servers 将在运行时由调度者根据连接情况动态注入
 )

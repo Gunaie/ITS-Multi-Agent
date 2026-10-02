@@ -157,10 +157,23 @@ const handleDelete = async (sid) => {
 }
 
 const handleGoToConsult = () => {
-  // 客服端地址按当前访问源推导, 避免写死 localhost(公网部署会跳到访问者本机)
-  // 端口映射: vite 开发 3000->3002 / 本地 docker 81->80 / 公网部署 8100->8000
+  // 用户端地址解析（优先级从高到低）：
+  // 1) 构建期环境变量 VITE_AGENT_URL 显式指定（临时端口/特殊部署无需改代码）
+  // 2) 按当前访问端口推导对端端口（vite 开发 / 本地 docker / 公网部署），
+  //    避免写死 localhost（公网部署会跳到访问者本机）
+  const explicit = import.meta.env.VITE_AGENT_URL
+  if (explicit) {
+    window.open(explicit, '_blank')
+    return
+  }
   const { protocol, hostname, port } = window.location
-  const agentPort = { '3000': '3002', '81': '80', '8100': '8000' }[port] || '80'
+  // key=本端端口，value=用户端端口
+  const agentPort = {
+    '3000': '3002',    // vite 默认开发端口
+    '5175': '5173',    // 3000 落入系统保留段时的备用开发端口
+    '81': '80',        // 本地 docker：管理端 81 → 用户端 80
+    '8100': '8000',    // 公网部署示例
+  }[port] || '80'
   const url = agentPort === '80'
     ? `${protocol}//${hostname}`
     : `${protocol}//${hostname}:${agentPort}`
