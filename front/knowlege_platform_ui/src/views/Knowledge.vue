@@ -41,8 +41,8 @@
         <el-table-column prop="chunks" label="新增切片数" width="150" align="center" />
         <el-table-column prop="status" label="状态" width="120">
           <template #default="scope">
-            <el-tag :type="scope.row.status === 'success' ? 'success' : 'danger'">
-              {{ scope.row.status }}
+            <el-tag :type="scope.row.status === 'success' ? 'success' : (scope.row.status === 'updated' ? 'warning' : 'danger')">
+              {{ scope.row.status === 'updated' ? '已覆盖更新' : scope.row.status }}
             </el-tag>
           </template>
         </el-table-column>

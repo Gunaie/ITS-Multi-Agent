@@ -29,7 +29,7 @@
       <div v-if="activeMenu === '/chat'" class="session-sidebar">
         <div class="session-header">
           <span>历史会话</span>
-          <el-button type="text" @click="handleNewChat">
+          <el-button text @click="handleNewChat">
             <el-icon><Plus /></el-icon>
           </el-button>
         </div>
@@ -158,9 +158,9 @@ const handleDelete = async (sid) => {
 
 const handleGoToConsult = () => {
   // 用户端地址解析（优先级从高到低）：
-  // 1) 构建期环境变量 VITE_AGENT_URL 显式指定（临时端口/特殊部署无需改代码）
-  // 2) 按当前访问端口推导对端端口（vite 开发 / 本地 docker / 公网部署），
-  //    避免写死 localhost（公网部署会跳到访问者本机）
+  // 1) 构建期环境变量 VITE_AGENT_URL 显式指定（临时端口无需改代码）
+  // 2) 按当前访问端口推导对端端口（本地开发 / 本地 docker），
+  //    避免写死 localhost
   const explicit = import.meta.env.VITE_AGENT_URL
   if (explicit) {
     window.open(explicit, '_blank')
@@ -172,7 +172,6 @@ const handleGoToConsult = () => {
     '3000': '3002',    // vite 默认开发端口
     '5175': '5173',    // 3000 落入系统保留段时的备用开发端口
     '81': '80',        // 本地 docker：管理端 81 → 用户端 80
-    '8100': '8000',    // 公网部署示例
   }[port] || '80'
   const url = agentPort === '80'
     ? `${protocol}//${hostname}`

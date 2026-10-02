@@ -56,6 +56,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"init_db 重试后仍失败，相关接口可能 500: {last_err}")
     # DDL 为同步阻塞调用，放线程池避免阻塞事件循环
     await asyncio.to_thread(_init_with_retry)
+    # 注意：使用 lifespan 后 @app.on_event("startup") 不再被触发，
+    # 必须在此显式调度原启动逻辑，否则 MCP 永不连接（联网搜索退化为空话术）
+    asyncio.create_task(startup_event())
     yield
 
 app = FastAPI(title="ITS Multi-Agent Application Backend", lifespan=lifespan)
@@ -91,7 +94,7 @@ from multi_agent.technical_agent import technical_agent
 from multi_agent.service_agent import comprehensive_service_agent
 
 # 初始化数据库表与 MCP 服务
-@app.on_event("startup")
+# 启动初始化（由 lifespan 显式调度；勿再加 @app.on_event，与 lifespan 冲突不生效）
 async def startup_event():
     try:
         UserRepo.init_table()
@@ -866,9 +869,11 @@ async def chat_stream(request: Request, chat_request: ChatRequest, current_user:
                 # 🔒 安全边界：确定性回复，直接生成一条 SSE 后退出，不启动任何 Agent
                 safety_text = _safety_chat_reply(chat_request.question)
                 logger.info("Intent gate (stream): safety_chat direct reply")
-                yield f"data: {json.dumps({'type':'raw_response_event','delta':safety_text})}\n\n"
-                yield f"data: {json.dumps({'type':'finish_reason','finish_reason':'stop'})}\n\n"
+                # 与前端协议统一：文本须用 run_item_stream_event/message_output_item.content。
+                # 前端不识别 raw_response_event，旧写法会导致安全回绝时助手气泡空白；并补 [DONE] 结束标记。
+                yield f"data: {json.dumps({'type':'run_item_stream_event','item_type':'message_output_item','content':safety_text}, ensure_ascii=False)}\n\n"
                 save_session(chat_request.session_id, session, user_id=user_id, app_type=chat_request.app_type)
+                yield "data: [DONE]\n\n"
                 return
             if intent == "compound":
                 # 复合意图显式编排(流式版, 与 /chat run_compound_flow 语义一致):

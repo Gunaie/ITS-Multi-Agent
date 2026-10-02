@@ -19,7 +19,7 @@
             <el-button type="primary" class="auth-btn" :loading="authLoading" @click="handleAuth">
               {{ isRegister ? '注 册' : '登 录' }}
             </el-button>
-            <el-button type="text" class="auth-switch" @click="isRegister = !isRegister">
+            <el-button link class="auth-switch" @click="isRegister = !isRegister">
               {{ isRegister ? '已有账号？去登录' : '没有账号？去注册' }}
             </el-button>
           </div>
